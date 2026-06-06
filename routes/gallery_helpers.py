@@ -32,10 +32,21 @@ def _extract_exif(content: bytes) -> dict:
         from PIL import Image
         from io import BytesIO
         img = Image.open(BytesIO(content))
+        # Read the raw EXIF before any transpose: exif_transpose strips the
+        # orientation tag and with it the parsed EXIF view.
+        exif = img._getexif() if hasattr(img, '_getexif') else None
+
+        # Record DISPLAY dimensions (EXIF-rotated), matching upload_handler.
+        # A phone photo with Orientation 6/8 is stored landscape but shown
+        # portrait, so the raw width/height swap the aspect ratio.
+        try:
+            from PIL import ImageOps
+            img = ImageOps.exif_transpose(img) or img
+        except Exception:
+            pass
         result["width"] = img.width
         result["height"] = img.height
 
-        exif = img._getexif() if hasattr(img, '_getexif') else None
         if not exif:
             return result
 
@@ -110,8 +121,18 @@ def _image_to_dict(img: GalleryImage, session_name: str = None) -> Dict[str, Any
 
 
 def _owner_filter(q, user):
-    """Apply owner filtering to a gallery query."""
+    """Apply owner filtering to a gallery query.
+
+    Anonymous requests fail closed. In explicit single-user/no-auth mode,
+    get_current_user returns None and the local ownerless gallery is visible.
+    """
     if user is None:
+        try:
+            from src.auth_helpers import _auth_disabled
+            if _auth_disabled():
+                return q
+        except Exception:
+            pass
         return q.filter(False)
     return q.filter(GalleryImage.owner == user)
 
