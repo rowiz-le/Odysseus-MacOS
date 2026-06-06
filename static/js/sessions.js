@@ -23,6 +23,7 @@ let _showAllSessions = false;
 let _expandedFolders = {};  // folderName -> true if "show more" clicked
 let _sortMode = Storage.get('odysseus-session-sort') || 'active'; // default to last active
 let _autoCreateInProgress = false; // guard against recursive auto-create
+let _loadSessionsRetryTimer = null;
 const _INCOGNITO_SESSIONS_KEY = 'ody-incognito-sessions'; // sessionStorage key for incognito session IDs
 const _isMac = /Mac|iPhone|iPad/.test(navigator.platform);
 const _mod = _isMac ? '⌘' : 'Ctrl';
@@ -1317,7 +1318,14 @@ export async function loadSessions() {
       const res = await fetch(`${API_BASE}/api/sessions`);
       fetched = await res.json();
     }
+    if (!Array.isArray(fetched)) {
+      throw new Error('Sessions API did not return a list');
+    }
     sessions = fetched;
+    if (_loadSessionsRetryTimer) {
+      clearTimeout(_loadSessionsRetryTimer);
+      _loadSessionsRetryTimer = null;
+    }
     renderSessionList();
 
     const sessionsSection = uiModule.el('sessions-section');
@@ -1325,6 +1333,14 @@ export async function loadSessions() {
       sessionsSection.classList.add('hidden');
     } else {
       sessionsSection.classList.remove('hidden');
+      sessionsSection.classList.remove('collapsed');
+      try {
+        const state = Storage.getJSON('section-collapsed') || {};
+        if (state['sessions-section']) {
+          state['sessions-section'] = false;
+          Storage.setJSON('section-collapsed', state);
+        }
+      } catch (_) {}
     }
 
     const activeSessions = sessions.filter(s => !s.archived);
@@ -1445,7 +1461,12 @@ export async function loadSessions() {
     }
   } catch (error) {
     console.error('Error in loadSessions:', error);
-    uiModule.showError('Failed to load sessions: ' + error.message);
+    if (!_loadSessionsRetryTimer) {
+      _loadSessionsRetryTimer = setTimeout(() => {
+        _loadSessionsRetryTimer = null;
+        loadSessions().catch(() => {});
+      }, 1500);
+    }
   }
 }
 

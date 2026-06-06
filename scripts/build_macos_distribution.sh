@@ -39,7 +39,7 @@ APPLESCRIPT="$BUILD_TMP/launcher.applescript"
 cat > "$APPLESCRIPT" <<'APPLESCRIPT'
 set appPath to POSIX path of (path to me)
 set launcherPath to appPath & "Contents/Resources/launcher.sh"
-do shell script quoted form of launcherPath & " >/tmp/odysseus-launcher.log 2>&1 &"
+do shell script quoted form of launcherPath & " >/tmp/odysseus-launcher.log 2>&1"
 APPLESCRIPT
 
 echo "Creating app shell"
@@ -80,6 +80,7 @@ plist_set "OSAAppletShowStartupScreen" "bool" "false"
 
 echo "Copying app payload"
 rsync -a --delete \
+  --include 'static/js/editor/build/***' \
   --exclude '.git/' \
   --exclude '.DS_Store' \
   --exclude '.env' \

@@ -71,6 +71,7 @@ fi
 
 echo "syncing app payload"
 rsync -a --delete \
+  --include 'static/js/editor/build/***' \
   --exclude '.git/' \
   --exclude '.DS_Store' \
   --exclude '.env' \
@@ -87,6 +88,51 @@ rsync -a --delete \
 
 cd "$RUN_DIR"
 mkdir -p data logs data/generated_images data/uploads data/personal_docs data/chroma
+
+support_data_is_empty() {
+  if [[ -f "data/auth.json" ]]; then
+    return 1
+  fi
+  if [[ -f "data/app.db" ]]; then
+    local session_count
+    session_count="$("$PYTHON_BIN" - "$RUN_DIR/data/app.db" <<'PY' 2>/dev/null || true
+import sqlite3, sys
+try:
+    con = sqlite3.connect(sys.argv[1])
+    print(con.execute("select count(*) from sessions").fetchone()[0])
+except Exception:
+    print("")
+PY
+)"
+    if [[ -n "$session_count" && "$session_count" != "0" ]]; then
+      return 1
+    fi
+  fi
+  return 0
+}
+
+migrate_data_if_empty() {
+  if ! support_data_is_empty; then
+    return
+  fi
+
+  local candidates=()
+  # When testing a locally built app from <repo>/dist/Odysseus.app, recover
+  # the developer data folder instead of presenting an empty first-run app.
+  candidates+=("$(cd "$BUNDLE_DIR/../../.." >/dev/null 2>&1 && pwd)/data")
+  candidates+=("$HOME/Documents/antigravity/epic-bell/data")
+
+  local src
+  for src in "${candidates[@]}"; do
+    if [[ -f "$src/auth.json" && -f "$src/app.db" ]]; then
+      echo "migrating existing Odysseus data from: $src"
+      rsync -a "$src"/ "$RUN_DIR/data"/
+      return
+    fi
+  done
+}
+
+migrate_data_if_empty
 
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
   echo "creating virtual environment"
@@ -119,4 +165,4 @@ export CHROMADB_PORT="${CHROMADB_PORT:-8100}"
 export PATH="$VENV_DIR/bin:$HOME/.lmstudio/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 echo "starting Odysseus"
-nohup "$VENV_DIR/bin/python" "$RUN_DIR/odysseus_desktop_launcher.py" >>"$LOG_DIR/odysseus_desktop.log" 2>&1 &
+exec "$VENV_DIR/bin/python" "$RUN_DIR/odysseus_desktop_launcher.py" >>"$LOG_DIR/odysseus_desktop.log" 2>&1
