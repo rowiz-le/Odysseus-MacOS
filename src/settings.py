@@ -122,6 +122,12 @@ DEFAULT_SETTINGS = {
     # addition to the built-in project data/ and system temp dirs. Each
     # entry is an absolute path. Sensitive subpaths (.ssh, .gnupg, shell
     # rc files, SSH key files) are always blocked regardless of roots.
+    # Modes:
+    #   restricted   -> data/ + tmp + explicit extra roots
+    #   user_folders -> restricted + ~/Desktop, ~/Documents, ~/Downloads
+    #   home         -> restricted + ~
+    #   full         -> filesystem root (still blocks sensitive subpaths)
+    "tool_path_access_mode": "user_folders",
     "tool_path_extra_roots": [],
     "task_endpoint_id": "",
     "task_model": "",

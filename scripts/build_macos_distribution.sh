@@ -6,6 +6,7 @@ BUNDLE_ID="com.odysseus.desktop"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"
+MACOS_DIR="$APP_BUNDLE/Contents/MacOS"
 RESOURCES_DIR="$APP_BUNDLE/Contents/Resources"
 PAYLOAD_DIR="$RESOURCES_DIR/app"
 BUILD_TMP="$ROOT_DIR/.macos-build"
@@ -21,11 +22,6 @@ echo " Output:  $APP_BUNDLE"
 echo " DMG:     $DMG_PATH"
 echo "============================================================"
 
-if ! command -v osacompile >/dev/null 2>&1; then
-  echo "error: osacompile is required and was not found" >&2
-  exit 1
-fi
-
 if ! command -v hdiutil >/dev/null 2>&1; then
   echo "error: hdiutil is required and was not found" >&2
   exit 1
@@ -35,17 +31,28 @@ mkdir -p "$DIST_DIR"
 rm -rf "$APP_BUNDLE" "$BUILD_TMP" "$DMG_PATH"
 mkdir -p "$BUILD_TMP"
 
-APPLESCRIPT="$BUILD_TMP/launcher.applescript"
-cat > "$APPLESCRIPT" <<'APPLESCRIPT'
-set appPath to POSIX path of (path to me)
-set launcherPath to appPath & "Contents/Resources/launcher.sh"
-do shell script quoted form of launcherPath & " >/tmp/odysseus-launcher.log 2>&1"
-APPLESCRIPT
-
 echo "Creating app shell"
-osacompile -o "$APP_BUNDLE" "$APPLESCRIPT"
+mkdir -p "$MACOS_DIR" "$RESOURCES_DIR" "$PAYLOAD_DIR"
+cat > "$MACOS_DIR/$APP_NAME" <<'LAUNCHER'
+#!/usr/bin/env bash
+set -euo pipefail
+APP_CONTENTS="$(cd "$(dirname "$0")/.." && pwd)"
+exec "$APP_CONTENTS/Resources/launcher.sh" >/tmp/odysseus-launcher.log 2>&1
+LAUNCHER
+chmod +x "$MACOS_DIR/$APP_NAME"
 
-mkdir -p "$RESOURCES_DIR" "$PAYLOAD_DIR"
+cat > "$APP_BUNDLE/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+</dict>
+</plist>
+PLIST
+
 cp "$ROOT_DIR/scripts/macos_launcher.sh" "$RESOURCES_DIR/launcher.sh"
 chmod +x "$RESOURCES_DIR/launcher.sh"
 
@@ -72,6 +79,7 @@ plist_set() {
 plist_set "CFBundleName" "string" "$APP_NAME"
 plist_set "CFBundleDisplayName" "string" "$APP_NAME"
 plist_set "CFBundleIdentifier" "string" "$BUNDLE_ID"
+plist_set "CFBundleExecutable" "string" "$APP_NAME"
 plist_set "CFBundleVersion" "string" "$VERSION"
 plist_set "CFBundleShortVersionString" "string" "$VERSION"
 plist_set "CFBundleIconFile" "string" "Odysseus"

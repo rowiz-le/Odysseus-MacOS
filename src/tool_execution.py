@@ -146,8 +146,9 @@ async def _do_edit_file(content: str, workspace: Optional[str] = None) -> Dict[s
 #   1. Sensitive-subpath deny list — checked FIRST. Blocks .ssh,
 #      .gnupg, shell rc files, token/env files even if the root above
 #      them is on the allowlist.
-#   2. Allowlist — only the directories the agent legitimately needs
-#      (project data/, system tmp). $HOME is NOT on the default list.
+#   2. Allowlist — project data/, system tmp, plus the configured
+#      tool_path_access_mode. macOS desktop builds default to user folders so
+#      ordinary "save this to Desktop" tasks work without granting secrets.
 #   3. Opt-in extra roots — admin can add broader roots via the
 #      "tool_path_extra_roots" setting (list of path strings).
 # ---------------------------------------------------------------------------
@@ -188,8 +189,8 @@ def _is_sensitive_path(resolved: str) -> bool:
 
 def _tool_path_roots() -> list[str]:
     """Return the list of directory roots that read_file / write_file
-    may touch. Default: project data/ + system temp dirs. Extra roots
-    are loaded from the ``tool_path_extra_roots`` setting.
+    may touch. Default: project data/ + system temp dirs + common user
+    folders. Extra roots are loaded from the ``tool_path_extra_roots`` setting.
     """
     roots: list[str] = []
 
@@ -211,9 +212,21 @@ def _tool_path_roots() -> list[str]:
     if tmpdir:
         roots.append(tmpdir)
 
-    # Opt-in extra roots from settings.
+    # User-configured access mode. The sensitive-path denylist still applies
+    # even when this is "home" or "full".
     try:
         from src.settings import get_setting
+        mode = str(get_setting("tool_path_access_mode", "user_folders") or "user_folders").strip().lower()
+        home = os.path.expanduser("~")
+        if mode == "full":
+            roots.append(os.path.abspath(os.sep))
+        elif mode == "home":
+            roots.append(home)
+        elif mode == "user_folders":
+            for name in ("Desktop", "Documents", "Downloads"):
+                roots.append(os.path.join(home, name))
+
+        # Opt-in extra roots from settings.
         extra = get_setting("tool_path_extra_roots")
         if isinstance(extra, list):
             roots.extend(str(r) for r in extra if r)
@@ -267,8 +280,9 @@ def _resolve_tool_path(raw_path: str) -> str:
             continue
         if common == root:
             return resolved
+    allowed = ", ".join(_tool_path_roots())
     raise ValueError(
-        f"path '{raw_path}' is outside the allowed roots"
+        f"path '{raw_path}' is outside the allowed roots. Allowed roots: {allowed}"
     )
 
 

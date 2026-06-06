@@ -456,6 +456,15 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
                 except (TypeError, ValueError):
                     raise HTTPException(400, f"{key} must be an integer")
                 val = max(lo, min(val, hi))
+            if key == "tool_path_access_mode":
+                val = str(val or "").strip().lower()
+                if val not in {"restricted", "user_folders", "home", "full"}:
+                    raise HTTPException(400, "tool_path_access_mode must be restricted, user_folders, home, or full")
+            if key == "tool_path_extra_roots":
+                if isinstance(val, str):
+                    val = [line.strip() for line in val.splitlines() if line.strip()]
+                if not isinstance(val, list):
+                    raise HTTPException(400, "tool_path_extra_roots must be a list")
             current[key] = val
         _save_settings(current)
         return current

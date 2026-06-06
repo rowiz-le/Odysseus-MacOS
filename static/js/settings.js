@@ -398,7 +398,12 @@ async function initDefaultChat() {
       });
       msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
       setTimeout(function() { msg.textContent = ''; }, 2000);
-    } catch (e) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
+    } catch (e) {
+      if (msg) {
+        msg.textContent = 'Failed to save';
+        msg.style.color = 'var(--red)';
+      }
+    }
   }
 
   epSel.addEventListener('change', function() { refreshModels(''); saveDefault(); });
@@ -1425,30 +1430,51 @@ async function initResearchSearchSettings() {
 /* ── Agent Settings (AI tab) ── */
 async function initAgentSettings() {
   var toolsInput = el('set-agentMaxTools');
+  var accessMode = el('set-toolAccessMode');
+  var extraRoots = el('set-toolExtraRoots');
   var msg = el('set-agentMsg');
-  if (!toolsInput) return;
+  if (!toolsInput && !accessMode && !extraRoots) return;
 
   try {
     var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
     var settings = await res.json();
-    if (settings.agent_max_tool_calls) toolsInput.value = settings.agent_max_tool_calls;
+    if (toolsInput && settings.agent_max_tool_calls) toolsInput.value = settings.agent_max_tool_calls;
+    if (accessMode) accessMode.value = settings.tool_path_access_mode || 'user_folders';
+    if (extraRoots) {
+      var roots = Array.isArray(settings.tool_path_extra_roots) ? settings.tool_path_extra_roots : [];
+      extraRoots.value = roots.join('\n');
+    }
   } catch (e) {}
 
   async function save() {
-    var val = parseInt(toolsInput.value, 10) || 0;
+    var val = toolsInput ? (parseInt(toolsInput.value, 10) || 0) : 0;
+    var roots = extraRoots ? extraRoots.value.split(/\n+/).map(function(s){ return s.trim(); }).filter(Boolean) : [];
+    var mode = accessMode ? accessMode.value : 'user_folders';
     try {
       await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_max_tool_calls: val })
+        body: JSON.stringify({
+          agent_max_tool_calls: val,
+          tool_path_access_mode: mode,
+          tool_path_extra_roots: roots
+        })
       });
-      msg.textContent = val > 0 ? 'Limit: ' + val + ' tool calls per message' : 'Unlimited';
-      msg.style.color = 'var(--fg)';
+      var accessText = mode === 'restricted' ? 'restricted'
+        : mode === 'user_folders' ? 'Desktop/Documents/Downloads'
+        : mode === 'home' ? 'home folder'
+        : 'full disk';
+      if (msg) {
+        msg.textContent = (val > 0 ? 'Limit: ' + val + ' tool calls' : 'Unlimited tools') + ' · File access: ' + accessText;
+        msg.style.color = 'var(--fg)';
+      }
     } catch (e) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
   }
 
-  toolsInput.addEventListener('change', save);
-  var cur = parseInt(toolsInput.value, 10) || 0;
-  msg.textContent = cur > 0 ? 'Limit: ' + cur + ' tool calls per message' : 'Unlimited';
+  if (toolsInput) toolsInput.addEventListener('change', save);
+  if (accessMode) accessMode.addEventListener('change', save);
+  if (extraRoots) extraRoots.addEventListener('change', save);
+  var cur = toolsInput ? (parseInt(toolsInput.value, 10) || 0) : 0;
+  if (msg) msg.textContent = cur > 0 ? 'Limit: ' + cur + ' tool calls per message' : 'Unlimited';
 }
 
 /* ═══════════════════════════════════════════

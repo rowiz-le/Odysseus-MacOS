@@ -1509,6 +1509,17 @@
                 <label class="settings-label">Tool call limit</label>
                 <input id="set-agentMaxTools" type="text" inputmode="numeric" placeholder="0 = unlimited" class="settings-select" style="width:120px;">
               </div>
+              <div class="settings-row">
+                <label class="settings-label">File access</label>
+                <select id="set-toolAccessMode" class="settings-select">
+                  <option value="restricted">Restricted</option>
+                  <option value="user_folders">Desktop, Documents, Downloads</option>
+                  <option value="home">Home folder</option>
+                  <option value="full">Full disk</option>
+                </select>
+              </div>
+              <label class="settings-label" for="set-toolExtraRoots">Extra folders</label>
+              <textarea id="set-toolExtraRoots" class="settings-select" rows="3" placeholder="/path/to/folder&#10;~/Projects" style="width:100%;min-height:72px;resize:vertical;"></textarea>
               <div id="set-agentMsg" style="font-size:11px;color:color-mix(in srgb, var(--fg) 45%, transparent);"></div>
             </div>
           </div>

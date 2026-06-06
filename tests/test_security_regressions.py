@@ -223,6 +223,68 @@ def test_inprocess_pollers_gate(monkeypatch):
         assert _inprocess_pollers_enabled() is True, f"{on!r} should enable"
 
 
+# ── agent file-access modes ────────────────────────────────────
+
+def test_tool_path_user_folders_allows_desktop(tmp_path, monkeypatch):
+    from src import settings
+    from src.tool_execution import _resolve_tool_path
+
+    home = tmp_path / "home"
+    desktop = home / "Desktop"
+    desktop.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    allowed_tmp = tmp_path / "allowed-tmp"
+    allowed_tmp.mkdir()
+    monkeypatch.setenv("TMPDIR", str(allowed_tmp))
+    monkeypatch.setattr(
+        settings,
+        "get_setting",
+        lambda key, default=None: "user_folders" if key == "tool_path_access_mode" else [],
+    )
+
+    assert _resolve_tool_path("~/Desktop/game/index.html") == str(desktop / "game" / "index.html")
+
+
+def test_tool_path_restricted_rejects_desktop(tmp_path, monkeypatch):
+    from src import settings
+    from src.tool_execution import _resolve_tool_path
+
+    home = tmp_path / "home"
+    (home / "Desktop").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    allowed_tmp = tmp_path / "allowed-tmp"
+    allowed_tmp.mkdir()
+    monkeypatch.setenv("TMPDIR", str(allowed_tmp))
+    monkeypatch.setattr(
+        settings,
+        "get_setting",
+        lambda key, default=None: "restricted" if key == "tool_path_access_mode" else [],
+    )
+
+    with pytest.raises(ValueError, match="outside the allowed roots"):
+        _resolve_tool_path("~/Desktop/game/index.html")
+
+
+def test_tool_path_full_still_blocks_sensitive_paths(tmp_path, monkeypatch):
+    from src import settings
+    from src.tool_execution import _resolve_tool_path
+
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    allowed_tmp = tmp_path / "allowed-tmp"
+    allowed_tmp.mkdir()
+    monkeypatch.setenv("TMPDIR", str(allowed_tmp))
+    monkeypatch.setattr(
+        settings,
+        "get_setting",
+        lambda key, default=None: "full" if key == "tool_path_access_mode" else [],
+    )
+
+    with pytest.raises(ValueError, match="sensitive"):
+        _resolve_tool_path("~/.ssh/id_ed25519")
+
+
 def test_require_user_accepts_loopback_when_unconfigured(monkeypatch):
     """First-run mode (no users set up yet) must still let loopback
     callers through — otherwise the install can't bootstrap. Public

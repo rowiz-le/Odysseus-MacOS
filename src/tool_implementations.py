@@ -1574,6 +1574,8 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
             "hard max": "agent_input_token_hard_max",
             "token budget cap": "agent_input_token_hard_max",
             "input budget cap": "agent_input_token_hard_max",
+            "file access": "tool_path_access_mode", "filesystem access": "tool_path_access_mode",
+            "tool file access": "tool_path_access_mode", "path access": "tool_path_access_mode",
         }
         def _resolve(k):
             k2 = (k or "").strip().lower()
@@ -1584,6 +1586,7 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
         _ENUMS = {
             "image_quality": ["low", "medium", "high"],
             "reminder_channel": ["browser", "email", "ntfy"],
+            "tool_path_access_mode": ["restricted", "user_folders", "home", "full"],
         }
         def _coerce(value, default):
             if isinstance(default, bool):
