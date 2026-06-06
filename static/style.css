@@ -35161,7 +35161,50 @@ pre,
 
 .logo-boat {
   object-fit: contain;
-  border-radius: 7px;
+  border-radius: 0;
+  background: transparent;
+}
+
+/* Transparent logo polish: keep the mark free-floating and make the
+   editorial wordmark readable in both Maison dark and bright modes. */
+.sidebar-logo-boat,
+#welcome-screen .welcome-boat,
+.logo-boat {
+  background: transparent !important;
+  border-radius: 0 !important;
+}
+
+.sidebar-logo-boat {
+  filter: drop-shadow(0 5px 12px rgba(0, 0, 0, 0.42));
+}
+
+#welcome-screen .welcome-boat {
+  width: clamp(74px, 6.6vw, 104px);
+  height: clamp(74px, 6.6vw, 104px);
+  filter: drop-shadow(0 16px 34px rgba(0, 0, 0, 0.44));
+}
+
+#welcome-screen .welcome-name {
+  color: color-mix(in srgb, var(--fg) 94%, var(--bg) 6%);
+  text-shadow: 0 14px 38px rgba(0, 0, 0, 0.42);
+}
+
+#welcome-screen .welcome-wordmark {
+  color: inherit;
+  -webkit-text-fill-color: currentColor;
+}
+
+:root[data-theme-mode="bright"] #welcome-screen .welcome-name {
+  color: color-mix(in srgb, var(--fg) 88%, #111 12%);
+  text-shadow: 0 12px 34px rgba(0, 0, 0, 0.16);
+}
+
+:root[data-theme-mode="bright"] #welcome-screen .welcome-boat {
+  filter: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.18));
+}
+
+:root[data-theme-mode="bright"] .sidebar-logo-boat {
+  filter: drop-shadow(0 4px 10px rgba(0, 0, 0, 0.22));
 }
 
 #welcome-screen .welcome-sub {
