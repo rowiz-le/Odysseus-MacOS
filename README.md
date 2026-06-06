@@ -1,18 +1,37 @@
-# Odysseus Macos
-───────────────────────────────────────────────
- ⊹ ࣪ ˖ ૮( ˶ᵔ ᵕ ᵔ˶ )っ  Odysseus vers. 1.0
-───────────────────────────────────────────────
+# Odysseus macOS
 
-![Odysseus](docs/odysseus.jpg)
+![Odysseus macOS](docs/odysseus-macos-app.png)
 
-Odysseus Macos is a macOS-focused remake of the Odysseus desktop experience,
-with a friendlier interface, app launcher, local-first workflow, and a
-drag-and-drop macOS distribution path.
+<p align="center">
+  <a href="https://github.com/rowiz-le/Odysseus-Macos/releases/download/v2026.06.06/Odysseus-macOS-2026.06.06.dmg">
+    <img alt="Tải Odysseus macOS" src="https://img.shields.io/badge/T%E1%BA%A3i%20Odysseus%20macOS-DMG-ef7f8d?style=for-the-badge&logo=apple&logoColor=white">
+  </a>
+  <a href="https://github.com/rowiz-le/Odysseus-Macos/releases/tag/v2026.06.06">
+    <img alt="Release" src="https://img.shields.io/badge/Release-v2026.06.06-111111?style=for-the-badge">
+  </a>
+</p>
 
-This project is based on the original Odysseus project by Pewdiepie:
+**Odysseus macOS** là bản remake giao diện và đóng gói macOS cho Odysseus:
+thân thiện hơn, có app launcher riêng, chạy local-first, và có file `.dmg`
+kéo-thả để cài nhanh trên macOS.
+
+**Tải nhanh:** [Odysseus-macOS-2026.06.06.dmg](https://github.com/rowiz-le/Odysseus-Macos/releases/download/v2026.06.06/Odysseus-macOS-2026.06.06.dmg)
+
+> Lưu ý: bản `.dmg` hiện tại cần Python 3.11+ trên máy Mac ở lần chạy đầu để
+> bootstrap môi trường riêng trong `~/Library/Application Support/Odysseus`.
+
+Dự án này được remake từ Odysseus gốc của Pewdiepie:
 [pewdiepie-archdaemon/odysseus](https://github.com/pewdiepie-archdaemon/odysseus).
 
-A self-hosted AI workspace -- meant to be the self-hosted version of the UI experience you get from ChatGPT and Claude. But with more jank and fun. Running on your own hardware, with your own data -- local-first, privacy-first, and no trojan.
+Odysseus là AI workspace tự host: trải nghiệm gần với ChatGPT/Claude, nhưng
+chạy trên máy của bạn, với dữ liệu của bạn, ưu tiên local-first và privacy-first.
+
+## Điểm mới trong bản macOS
+  - **Giao diện mới** -- dark UI gọn hơn, sidebar rõ hơn, wordmark/branding theo phong cách sang hơn.
+  - **macOS app launcher** -- mở như app desktop, tự chạy Odysseus trên localhost.
+  - **Bản cài DMG** -- có file `.dmg` để kéo `Odysseus.app` vào Applications.
+  - **Logo/icon mới** -- favicon, app icon, manifest icon đã đồng bộ theo Odysseus macOS.
+  - **Hermes runtime** -- có cầu nối thử nghiệm sang Hermes Agent gateway cho Agent mode.
 
 ## Features
   - **Chat** -- chat with any local model or API; adding them is super simple.<br>　<sub>vLLM · llama.cpp · Ollama · OpenRouter · OpenAI</sub>
