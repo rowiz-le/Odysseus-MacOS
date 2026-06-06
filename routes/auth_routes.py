@@ -443,6 +443,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         _INT_RANGES = {
             "agent_max_rounds": (1, 200),
             "agent_max_tool_calls": (0, 1000),  # 0 = unlimited
+            "agent_max_tokens": (1024, 65536),
         }
         for key in DEFAULT_SETTINGS:
             if key not in body:

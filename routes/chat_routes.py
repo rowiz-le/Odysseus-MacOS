@@ -1109,6 +1109,16 @@ def setup_chat_routes(
                     except (TypeError, ValueError):
                         _max_rounds = _DEFAULT_ROUNDS
                     _max_rounds = max(1, min(_max_rounds, 200))
+                    try:
+                        _agent_max_tokens = int(ctx.preset.max_tokens or 0)
+                    except (TypeError, ValueError):
+                        _agent_max_tokens = 0
+                    if _agent_max_tokens <= 0:
+                        try:
+                            _agent_max_tokens = int(get_setting("agent_max_tokens", 8192) or 8192)
+                        except (TypeError, ValueError):
+                            _agent_max_tokens = 8192
+                    _agent_max_tokens = max(1024, min(_agent_max_tokens, 65536))
 
                     async for chunk in stream_agent_loop(
                         sess.endpoint_url,
@@ -1116,7 +1126,7 @@ def setup_chat_routes(
                         messages,
                         headers=sess.headers,
                         temperature=ctx.preset.temperature,
-                        max_tokens=ctx.preset.max_tokens,
+                        max_tokens=_agent_max_tokens,
                         prompt_type=preset_id,
                         max_tool_calls=_tool_budget,
                         max_rounds=_max_rounds,

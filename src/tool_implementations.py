@@ -1567,6 +1567,8 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
             "reminder channel": "reminder_channel", "reminders": "reminder_channel",
             "ntfy topic": "reminder_ntfy_topic",
             "agent tool calls": "agent_max_tool_calls", "max tool calls": "agent_max_tool_calls",
+            "agent max tokens": "agent_max_tokens", "agent output tokens": "agent_max_tokens",
+            "max output tokens": "agent_max_tokens",
             "agent timeout": "agent_stream_timeout_seconds", "stream timeout": "agent_stream_timeout_seconds",
             "token budget": "agent_input_token_budget", "input budget": "agent_input_token_budget",
             "hard max": "agent_input_token_hard_max",
