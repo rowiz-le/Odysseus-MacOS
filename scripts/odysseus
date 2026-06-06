@@ -116,12 +116,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
     # Run the subcommand with the project's venv Python so dependencies
-    # (bcrypt, sqlalchemy, fastapi, ...) resolve. Fall back to whatever
-    # `python` is on PATH if no venv is found — useful in container
-    # installs that wire the deps system-wide.
+    # (bcrypt, sqlalchemy, fastapi, ...) resolve. Prefer the Python 3.11
+    # desktop runtime when present; the legacy `venv` on this machine may be
+    # Python 3.9, which cannot import the current codebase.
     repo_root = SCRIPTS_DIR.parent
-    venv_python = repo_root / "venv" / "bin" / "python"
-    py = str(venv_python) if venv_python.exists() else sys.executable
+    venv_candidates = [
+        repo_root / ".venv311" / "bin" / "python",
+        repo_root / ".venv" / "bin" / "python",
+        repo_root / "venv" / "bin" / "python",
+    ]
+    py = str(next((p for p in venv_candidates if p.exists()), sys.executable))
     os.execv(py, [py, str(sub)] + argv[1:])
     return 0  # unreachable
 

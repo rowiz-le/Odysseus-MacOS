@@ -286,7 +286,24 @@ def add_user_message(sess, chat_handler, preprocessed: PreprocessedMessage, inco
     In incognito mode, still add to in-memory history (for conversation context)
     but skip session name update (which would persist)."""
     user_meta = {"attachments": preprocessed.attachment_meta} if preprocessed.attachment_meta else None
-    sess.add_message(ChatMessage("user", preprocessed.user_content, metadata=user_meta))
+    # Persist a text representation for DB/history, but keep the current
+    # in-memory turn multimodal so vision-capable local models receive
+    # OpenAI-compatible image_url blocks. SQLite cannot bind a Python list in
+    # chat_messages.content, and storing base64 images in history would bloat
+    # the database anyway.
+    stored_content = preprocessed.text_for_context
+    sess.add_message(ChatMessage("user", stored_content, metadata=user_meta))
+    if isinstance(preprocessed.user_content, list) and sess.history:
+        sess.history[-1].content = preprocessed.user_content
+        try:
+            image_count = sum(
+                1 for item in preprocessed.user_content
+                if isinstance(item, dict) and item.get("type") == "image_url"
+            )
+            if image_count:
+                logger.info("Prepared multimodal user turn with %s image(s) for model %s", image_count, getattr(sess, "model", ""))
+        except Exception:
+            pass
     if not incognito:
         chat_handler.update_session_name_if_needed(sess, preprocessed.text_for_context)
 

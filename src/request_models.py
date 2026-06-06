@@ -12,6 +12,7 @@ class ChatRequest(BaseModel):
     use_research: Optional[bool] = Field(default=False, description="Enable deep research")
     time_filter: Optional[str] = Field(default=None, description="Time filter for search")
     preset_id: Optional[str] = Field(default=None, description="Preset identifier")
+    agent_runtime: Optional[str] = Field(default="odysseus", description="Agent runtime: odysseus or hermes")
     
     @field_validator('message')
     @classmethod

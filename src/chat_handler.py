@@ -150,7 +150,8 @@ class ChatHandler:
         VISION_KEYWORDS = [
             "gpt-4o", "gpt-4.1", "gpt-4.5", "gpt-4-turbo", "gpt-4-vision",
             "claude-sonnet", "claude-opus", "claude-haiku",
-            "gemini", "llava", "pixtral", "qwen2-vl", "qwen-vl", "qwen3-vl", "qwen3vl", "minicpm",
+            "gemini", "gemma", "llava", "pixtral", "qwen2-vl", "qwen-vl", "qwen3-vl", "qwen3vl", "minicpm",
+            "nemotron", "omni", "vision",
         ]
         main_model = (sess.model or "").lower()
         main_is_vision = any(kw in main_model for kw in VISION_KEYWORDS)
@@ -205,7 +206,13 @@ class ChatHandler:
                             try:
                                 with open(_vcache) as _vf:
                                     _vtext = _vf.read().strip()
-                                if _vtext:
+                                _lower_vtext = _vtext.lower()
+                                _is_failure_caption = (
+                                    _lower_vtext.startswith("[no vision model configured")
+                                    or _lower_vtext.startswith("[vl model unavailable")
+                                    or _lower_vtext.startswith("[vision is disabled")
+                                )
+                                if _vtext and not _is_failure_caption:
                                     enhanced_message += f"\n[User-corrected caption / OCR for this image — treat as authoritative]:\n{_vtext}"
                                     _m = meta_by_id.get(att_id)
                                     if _m is not None:
@@ -224,6 +231,13 @@ class ChatHandler:
                             try:
                                 with open(_vcache) as _vf:
                                     vl_desc = _vf.read()
+                                _lower_vl_desc = (vl_desc or "").strip().lower()
+                                if (
+                                    _lower_vl_desc.startswith("[no vision model configured")
+                                    or _lower_vl_desc.startswith("[vl model unavailable")
+                                    or _lower_vl_desc.startswith("[vision is disabled")
+                                ):
+                                    vl_desc = None
                             except Exception:
                                 vl_desc = None
                         if not vl_desc:

@@ -1550,9 +1550,23 @@ function initializeEventListeners() {
   (function initModeToggle() {
     const agentBtn = el('mode-agent-btn');
     const chatBtn = el('mode-chat-btn');
+    const runtimeToggle = el('agent-runtime-toggle');
+    const odysseusBtn = el('runtime-odysseus-btn');
+    const hermesBtn = el('runtime-hermes-btn');
     if (!agentBtn || !chatBtn) return;
     const state = loadToggleState();
     let currentMode = state.mode || 'chat';
+    let currentRuntime = state.agent_runtime || 'odysseus';
+
+    function setRuntime(runtime) {
+      currentRuntime = runtime === 'hermes' ? 'hermes' : 'odysseus';
+      const st = loadToggleState();
+      st.agent_runtime = currentRuntime;
+      saveToggleState(st);
+      if (runtimeToggle) runtimeToggle.classList.toggle('runtime-hermes', currentRuntime === 'hermes');
+      if (odysseusBtn) odysseusBtn.classList.toggle('active', currentRuntime === 'odysseus');
+      if (hermesBtn) hermesBtn.classList.toggle('active', currentRuntime === 'hermes');
+    }
 
     function setMode(mode) {
       currentMode = mode;
@@ -1564,6 +1578,7 @@ function initializeEventListeners() {
       // Slide the pill to the active button
       const toggle = agentBtn.closest('.mode-toggle');
       if (toggle) toggle.classList.toggle('mode-chat', mode === 'chat');
+      if (runtimeToggle) runtimeToggle.classList.toggle('visible', mode === 'agent');
       // Delay tool glow-up for a staggered effect
       setTimeout(() => applyModeToToggles(mode), 500);
     }
@@ -1574,6 +1589,9 @@ function initializeEventListeners() {
       setMode('agent');
     });
     chatBtn.addEventListener('click', () => setMode('chat'));
+    if (odysseusBtn) odysseusBtn.addEventListener('click', () => setRuntime('odysseus'));
+    if (hermesBtn) hermesBtn.addEventListener('click', () => setRuntime('hermes'));
+    setRuntime(currentRuntime);
     setMode(currentMode);
   })();
 
@@ -2328,7 +2346,7 @@ function initializeEventListeners() {
 
   // Selector map: key → CSS selector(s) for targets
   const UI_VIS_MAP = {
-    'sidebar-brand':       '.sidebar-brand-title',
+    'sidebar-brand':       '#sidebar-brand-btn .logo-boat, .sidebar-brand-title',
     'sidebar-new-chat':    '#sidebar-new-chat-btn',
     'sidebar-search':      '#sidebar-search-btn',
     'sessions-section':    '#sessions-section',
@@ -2348,6 +2366,7 @@ function initializeEventListeners() {
     'tool-tasks':          '#tool-tasks-btn',
     'tool-theme':          '#tool-theme-btn',
     'user-bar':            '#user-bar-profile',
+    'theme-mode-toggle':   '#theme-mode-toggle',
     'sidebar-settings-btn':'#user-bar-settings',
     'chat-meta':           '.chat-meta-overlay',
     'welcome-text':        '.welcome-name, .welcome-sub, #welcome-tip',
@@ -2357,7 +2376,7 @@ function initializeEventListeners() {
     'rag-toggle-btn':      '#overflow-rag-btn',
     'bash-toggle-btn':     '#bash-toggle-btn',
     'overflow-plus-btn':   '.overflow-wrapper',
-    'mode-toggle':         '.mode-toggle',
+    'mode-toggle':         '.mode-toggle, .agent-runtime-toggle',
     'preset-mini-btn':     '#overflow-preset-btn',
     'attach-btn':          '#overflow-attach-btn',
     'research-btn':        '#overflow-research-btn',

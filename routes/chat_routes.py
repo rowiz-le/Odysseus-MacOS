@@ -219,6 +219,7 @@ def setup_chat_routes(
         use_research = form_data.get("use_research")
         time_filter = form_data.get("time_filter")
         preset_id = form_data.get("preset_id")
+        agent_runtime = str(form_data.get("agent_runtime", "")).lower().strip()
         allow_bash = form_data.get("allow_bash")
         allow_web_search = form_data.get("allow_web_search")
         use_rag = form_data.get("use_rag")
@@ -226,6 +227,21 @@ def setup_chat_routes(
         compare_mode = str(form_data.get("compare_mode", "")).lower() == "true"
         incognito = str(form_data.get("incognito", "")).lower() == "true"
         chat_mode = str(form_data.get("mode", "")).lower()  # 'chat' or 'agent'
+
+        def _form_bool(value: Any) -> bool:
+            if isinstance(value, bool):
+                return value
+            if value is None:
+                return False
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+        use_web = _form_bool(use_web)
+        use_research = _form_bool(use_research)
+        use_rag = _form_bool(use_rag)
+        if body and isinstance(body.get("agent_runtime"), str):
+            agent_runtime = body.get("agent_runtime", "").lower().strip()
+        if agent_runtime not in ("hermes", "odysseus"):
+            agent_runtime = "odysseus"
         # Did the USER explicitly pick agent mode? (vs. us auto-escalating
         # below). Skill extraction should only learn from real agent sessions,
         # not chats we quietly promoted for a notes/calendar intent.
@@ -630,6 +646,12 @@ def setup_chat_routes(
             # Send model name early so the frontend can show it during streaming
             _model_suffix = "Research" if do_research else None
             _model_info = {"type": "model_info", "model": sess.model}
+            if chat_mode == "agent" and agent_runtime == "hermes":
+                try:
+                    from src.hermes_bridge import hermes_model
+                    _model_info = {"type": "model_info", "model": hermes_model(), "suffix": "Hermes"}
+                except Exception:
+                    _model_info = {"type": "model_info", "model": "hermes-agent", "suffix": "Hermes"}
             if _model_suffix:
                 _model_info["suffix"] = _model_suffix
             if ctx.preset.character_name:
@@ -657,7 +679,7 @@ def setup_chat_routes(
                 except Exception:
                     pass
 
-            if _is_image_model:
+            if _is_image_model and not (chat_mode == "agent" and agent_runtime == "hermes"):
                 from src.settings import get_setting
                 if not get_setting("image_gen_enabled", True):
                     yield f'data: {json.dumps({"delta": "Image generation is disabled by the administrator."})}\n\n'
@@ -778,6 +800,95 @@ def setup_chat_routes(
                         sess.add_message(ChatMessage("assistant", _stopped_content, metadata=_stopped_md))
                         if not incognito:
                             session_manager.save_sessions()
+                    raise
+                finally:
+                    _active_streams.pop(session, None)
+            elif agent_runtime == "hermes":
+                _agent_rounds = 1
+                _agent_tool_calls = 0
+                try:
+                    from src.hermes_bridge import HermesBridgeError, stream_hermes_agent
+                    _system_bits = []
+                    for _msg in messages:
+                        if _msg.get("role") == "system" and isinstance(_msg.get("content"), str):
+                            _system_bits.append(_msg["content"])
+                    async for chunk in stream_hermes_agent(
+                        messages=messages,
+                        session_id=session,
+                        user_message=message,
+                        system_message="\n\n".join(_system_bits),
+                    ):
+                        if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
+                            try:
+                                data = json.loads(chunk[6:])
+                                if "delta" in data:
+                                    full_response += data["delta"]
+                                    _stream_set(session, partial=full_response)
+                                    yield chunk
+                                elif data.get("type") in ("tool_start", "tool_output", "agent_step"):
+                                    if data.get("type") == "agent_step":
+                                        _agent_rounds = max(_agent_rounds, data.get("round", 1))
+                                    elif data.get("type") == "tool_start":
+                                        _agent_tool_calls += 1
+                                    yield chunk
+                                elif data.get("type") == "metrics":
+                                    last_metrics = data.get("data", {})
+                                    last_metrics["model"] = data.get("model") or last_metrics.get("model") or "hermes-agent"
+                                    yield f'data: {json.dumps({"type": "metrics", "data": last_metrics})}\n\n'
+                                elif data.get("type") == "model_info":
+                                    yield chunk
+                            except json.JSONDecodeError:
+                                yield chunk
+                        elif chunk.startswith("event: error"):
+                            yield chunk
+                        elif chunk.startswith("event: "):
+                            yield chunk
+                        elif chunk == "data: [DONE]\n\n":
+                            if full_response:
+                                if last_metrics is None:
+                                    last_metrics = {
+                                        "model": "hermes-agent",
+                                        "usage_source": "hermes",
+                                    }
+                                _saved_id = save_assistant_response(
+                                    sess, session_manager, session, full_response, last_metrics,
+                                    character_name=ctx.preset.character_name,
+                                    web_sources=web_sources,
+                                    rag_sources=ctx.rag_sources,
+                                    used_memories=ctx.used_memories,
+                                    incognito=incognito,
+                                )
+                                if _saved_id:
+                                    yield f'data: {json.dumps({"type": "message_saved", "id": _saved_id})}\n\n'
+                                run_post_response_tasks(
+                                    sess, session_manager, session, message, full_response,
+                                    last_metrics, ctx.uprefs, memory_manager, memory_vector, webhook_manager,
+                                    incognito=incognito, compare_mode=compare_mode,
+                                    character_name=ctx.preset.character_name,
+                                    agent_rounds=_agent_rounds,
+                                    agent_tool_calls=_agent_tool_calls,
+                                    skills_manager=skills_manager,
+                                    owner=_user,
+                                    extract_skills=user_requested_agent,
+                                )
+                            _stream_set(session, status="done")
+                            yield chunk
+                except HermesBridgeError as e:
+                    msg = str(e)
+                    logger.warning("Hermes runtime unavailable for session %s: %s", session, msg)
+                    yield f"event: error\ndata: {json.dumps({'message': msg}, ensure_ascii=False)}\n\n"
+                    yield f'data: {json.dumps({"delta": msg}, ensure_ascii=False)}\n\n'
+                    yield "data: [DONE]\n\n"
+                    _stream_set(session, status="done")
+                except (asyncio.CancelledError, GeneratorExit):
+                    try:
+                        if full_response:
+                            _stopped_content_h, _stopped_md_h = clean_thinking_for_save(full_response, {"stopped": True, "model": "hermes-agent"})
+                            sess.add_message(ChatMessage("assistant", _stopped_content_h, metadata=_stopped_md_h))
+                            if not incognito:
+                                session_manager.save_sessions()
+                    except Exception:
+                        logger.exception("Failed to save partial Hermes response on disconnect (session %s)", session)
                     raise
                 finally:
                     _active_streams.pop(session, None)

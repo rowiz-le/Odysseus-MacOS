@@ -8,6 +8,25 @@ import { makeWindowDraggable } from './windowDrag.js';
 import { snapModalToZone } from './tileManager.js';
 
 export const THEMES = {
+  maison:     { bg:'#0c0b0a', fg:'#f6f1e8', panel:'#11100e', border:'#2a2520', red:'#8f1d2c',
+                advanced: { sendBtnBg: '#8f1d2c', sendBtnHover: '#a93646',
+                            userBubbleBg: '#181512', aiBubbleBg: '#0f0e0d',
+                            bubbleBorder: '#2f2a24', sidebarBg: '#050505',
+                            sectionAccent: '#b9976b', brandColor: '#e06c75',
+                            inputBg: '#0d0c0b', inputBorder: '#332d26',
+                            codeBg: '#0a0908', codeFg: '#f7f0e6',
+                            toggleBg: '#090807', toggleActive: '#24201b',
+                            accentPrimary: '#b9976b', accentError: '#8f1d2c' } },
+  'maison-bright':
+              { bg:'#f7f7f5', fg:'#17130f', panel:'#ffffff', border:'#d8d6d0', red:'#8f1d2c',
+                advanced: { sendBtnBg: '#17130f', sendBtnHover: '#2b251f',
+                            userBubbleBg: '#ffffff', aiBubbleBg: '#f2f1ee',
+                            bubbleBorder: '#d8d6d0', sidebarBg: '#f2f1ee',
+                            sectionAccent: '#a67c45', brandColor: '#17130f',
+                            inputBg: '#ffffff', inputBorder: '#d8d6d0',
+                            codeBg: '#ededeb', codeFg: '#201a14',
+                            toggleBg: '#efeeeb', toggleActive: '#ffffff',
+                            accentPrimary: '#a67c45', accentError: '#8f1d2c' } },
   dark:       { bg:'#282c34', fg:'#9cdef2', panel:'#111111', border:'#355a66', red:'#e06c75' },
   light:      { bg:'#f0ebe3', fg:'#5a5248', panel:'#faf6f0', border:'#d4cdc2', red:'#c47d5a' },
   midnight:   { bg:'#0d1117', fg:'#c9d1d9', panel:'#161b22', border:'#30363d', red:'#f85149' },
@@ -30,7 +49,7 @@ export const THEMES = {
   cute:       { bg:'#fff0f5', fg:'#d4608a', panel:'#fff8fa', border:'#f0c0d0', red:'#ff6b9d' },
 };
 
-const DEFAULT_THEME = 'dark';
+const DEFAULT_THEME = 'maison';
 const LS_KEY = 'odysseus-theme';
 const CUSTOM_THEMES_KEY = 'odysseus-custom-themes';
 
@@ -39,12 +58,14 @@ const FONT_MAP = {
   sans: "system-ui, -apple-system, 'Segoe UI', sans-serif",
   serif: "Georgia, 'Times New Roman', serif",
 };
-const DEFAULT_FONT = 'mono';
+const DEFAULT_FONT = 'sans';
 const DEFAULT_DENSITY = 'comfortable';
 const MAX_CUSTOM_THEMES = 8;
 
 // Default background patterns for built-in themes
 const THEME_DEFAULT_PATTERN = {
+  maison:     'none',
+  'maison-bright': 'none',
   dark:       'none',
   light:      'dots',
   midnight:   'rain',
@@ -190,7 +211,10 @@ const ADV_KEYS = [
   { key: 'sendBtnHover',       css: '--send-btn-hover',    label: 'Send Hover',       group: 'Chat Input / Prompt Area' },
   { key: 'codeBg',             css: '--code-bg',           label: 'Code Bg',          group: 'Code Blocks' },
   { key: 'codeFg',             css: '--code-fg',           label: 'Code Text',        group: 'Code Blocks' },
+  { key: 'toggleBg',           css: '--toggle-bg',         label: 'Toggle Bg',        group: 'Controls' },
   { key: 'toggleActive',       css: '--toggle-active',     label: 'Toggle On',        group: 'Controls' },
+  { key: 'accentPrimary',      css: '--accent-primary',    label: 'Primary Accent',   group: 'Controls' },
+  { key: 'accentError',        css: '--accent-error',      label: 'Error Accent',     group: 'Controls' },
 ];
 
 function computeAdvancedDefaults(colors) {
@@ -209,7 +233,10 @@ function computeAdvancedDefaults(colors) {
     sendBtnHover: red,
     codeBg: syn.bg,
     codeFg: syn.fg,
+    toggleBg: colors.bg,
     toggleActive: red,
+    accentPrimary: red,
+    accentError: red,
   };
 }
 
@@ -250,8 +277,30 @@ function generateHarmonyColors(accentHex, harmonyType, mode) {
   };
 }
 
+function _isLightTheme(colors) {
+  const hex = (colors && colors.bg || '').replace('#', '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(hex)) return false;
+  const r = parseInt(hex.slice(0, 2), 16) / 255;
+  const g = parseInt(hex.slice(2, 4), 16) / 255;
+  const b = parseInt(hex.slice(4, 6), 16) / 255;
+  const luminance = (0.2126 * r) + (0.7152 * g) + (0.0722 * b);
+  return luminance > 0.62;
+}
+
+function _themeMode(colors) {
+  return _isLightTheme(colors) ? 'bright' : 'dark';
+}
+
+function _setThemeModeAttr(colors) {
+  const mode = _themeMode(colors);
+  document.documentElement.dataset.themeMode = mode;
+  if (document.body) document.body.dataset.themeMode = mode;
+  return mode;
+}
+
 export function applyColors(colors) {
   const s = document.documentElement.style;
+  _setThemeModeAttr(colors);
   s.setProperty('--bg', colors.bg);
   s.setProperty('--fg', colors.fg);
   s.setProperty('--panel', colors.panel);
@@ -283,8 +332,9 @@ export function applyColors(colors) {
     s.setProperty(css, adv[key] || defaults[key]);
   }
 
-  // Update favicon to match theme accent color
-  _updateFavicon(colors.red || '#e06c75');
+  // Update favicon to match the active theme and route.
+  _updateFavicon(colors);
+  syncThemeModeToggle();
 }
 
 // Per-route SVG shape registry — kept in sync with the inline favicon
@@ -325,23 +375,23 @@ const _ROUTE_FAVICON_SHAPES = {
     "<rect x='21' y='8' width='6' height='19' rx='1' fill='none' stroke='__C__' stroke-width='2.5' transform='rotate(8 24 17)'/>",
 };
 
-function _updateFavicon(fg) {
+function _updateFavicon(colorsOrFg) {
+  const colors = typeof colorsOrFg === 'string' ? { fg: colorsOrFg, red: colorsOrFg } : (colorsOrFg || {});
+  const fg = colors.red || colors.fg || '#e06c75';
   const path = (window.location.pathname || '').toLowerCase();
   const routeShape = _ROUTE_FAVICON_SHAPES[path];
-  let svg;
-  if (routeShape) {
-    svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>${routeShape.split('__C__').join(fg)}</svg>`;
-  } else {
-    svg = `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><path d='M16 4L16 22L6 22Z' fill='${fg}'/><path d='M16 8L16 22L24 22Z' fill='${fg}' opacity='0.6'/><path d='M4 24Q10 20 16 24Q22 28 28 24' stroke='${fg}' stroke-width='2.5' fill='none' stroke-linecap='round'/></svg>`;
-  }
-  const href = 'data:image/svg+xml,' + encodeURIComponent(svg);
+  const href = routeShape
+    ? 'data:image/svg+xml,' + encodeURIComponent(
+        `<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'>${routeShape.split('__C__').join(fg)}</svg>`
+      )
+    : '/static/favicon.png';
   let link = document.querySelector("link[rel='icon']");
   if (!link) {
     link = document.createElement('link');
     link.rel = 'icon';
-    link.type = 'image/svg+xml';
     document.head.appendChild(link);
   }
+  link.type = routeShape ? 'image/svg+xml' : 'image/png';
   link.href = href;
   let apple = document.querySelector("link[rel='apple-touch-icon']");
   if (!apple) {
@@ -349,7 +399,7 @@ function _updateFavicon(fg) {
     apple.rel = 'apple-touch-icon';
     document.head.appendChild(apple);
   }
-  apple.href = href;
+  apple.href = routeShape ? href : '/static/icon-192.png';
 }
 
 // Cache of discovered custom fonts: { "Family Name": [ {file, url, format} ] }
@@ -461,6 +511,7 @@ export function save(name, colors, opts) {
   }
   Storage.setJSON(LS_KEY, obj);
   _syncToServer(obj);
+  syncThemeModeToggle(name);
 }
 
 function _syncToServer(obj) {
@@ -472,6 +523,54 @@ function _syncToServer(obj) {
       body: JSON.stringify({ value: obj }),
     }).catch(e => console.warn('Theme sync failed:', e));
   } catch (e) { console.warn('Theme sync error:', e); }
+}
+
+function _saveMaisonMode(name) {
+  const colors = THEMES[name] || THEMES[DEFAULT_THEME];
+  applyColors(colors);
+  applyFontDensity('sans', DEFAULT_DENSITY);
+  applyBgEffectColor('');
+  applyBgEffectIntensity(1);
+  applyBgEffectSize(1);
+  applyFrostedGlass(false);
+  applyBgPattern('none');
+  save(name, colors, { font: 'sans', density: DEFAULT_DENSITY, bgPattern: 'none' });
+  syncThemeModeToggle(name);
+  document.querySelectorAll('.theme-swatch').forEach(sw => {
+    sw.classList.toggle('active', sw.dataset.theme === name);
+  });
+}
+
+export function syncThemeModeToggle(forceName) {
+  const btn = document.getElementById('theme-mode-toggle');
+  if (!btn) return;
+  const saved = forceName ? { name: forceName, colors: THEMES[forceName] } : getSaved();
+  const colors = (saved && saved.colors) || THEMES[DEFAULT_THEME];
+  const isBright = (saved && saved.name === 'maison-bright') || _themeMode(colors) === 'bright';
+  btn.classList.toggle('is-bright', isBright);
+  btn.classList.toggle('is-dark', !isBright);
+  btn.setAttribute('aria-pressed', isBright ? 'true' : 'false');
+  btn.setAttribute('aria-label', isBright ? 'Bright mode on' : 'Dark mode on');
+  btn.title = isBright ? 'Switch to dark mode' : 'Switch to bright mode';
+}
+
+export function toggleMaisonMode() {
+  const saved = getSaved();
+  const colors = (saved && saved.colors) || THEMES[DEFAULT_THEME];
+  const isBright = (saved && saved.name === 'maison-bright') || _themeMode(colors) === 'bright';
+  _saveMaisonMode(isBright ? 'maison' : 'maison-bright');
+}
+
+function initThemeModeToggle() {
+  const btn = document.getElementById('theme-mode-toggle');
+  if (!btn || btn.dataset.bound === '1') return;
+  btn.dataset.bound = '1';
+  btn.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    toggleMaisonMode();
+  });
+  syncThemeModeToggle();
 }
 
 async function _loadFromServer() {
@@ -921,16 +1020,29 @@ export function initThemeUI() {
       applyColors(colors);
       syncPickers(colors);
       applyFontDensity(DEFAULT_FONT, DEFAULT_DENSITY);
+      applyBgEffectColor('');
+      applyBgEffectIntensity(1);
+      applyBgEffectSize(1);
+      applyFrostedGlass(false);
       applyBgPattern('none');
       const fs = document.getElementById('theme-font-select');
       const ds = document.getElementById('theme-density-select');
       const ps = document.getElementById('theme-bg-pattern-select');
+      const ecs = document.getElementById('theme-bg-effect-color');
+      const eis = document.getElementById('theme-bg-intensity');
+      const szs = document.getElementById('theme-bg-size');
+      const frs = document.getElementById('theme-frosted-toggle');
       if (fs) fs.value = DEFAULT_FONT;
       if (ds) ds.value = DEFAULT_DENSITY;
       if (ps) ps.value = 'none';
+      if (ecs) ecs.value = colors.fg || '#f6f1e8';
+      if (eis) eis.value = '100';
+      if (szs) szs.value = '100';
+      if (frs) frs.checked = false;
       grid.querySelectorAll('.theme-swatch').forEach(s => s.classList.remove('active'));
-      const darkSwatch = grid.querySelector('[data-theme="dark"]');
-      if (darkSwatch) darkSwatch.classList.add('active');
+      const defaultSwatch = grid.querySelector(`[data-theme="${DEFAULT_THEME}"]`);
+      if (defaultSwatch) defaultSwatch.classList.add('active');
+      save(DEFAULT_THEME, colors, { font: DEFAULT_FONT, density: DEFAULT_DENSITY, bgPattern: 'none' });
     });
   }
 
@@ -2026,6 +2138,7 @@ const themeModule = { initThemeUI, togglePopup, closePopup, makeDraggable,
                        THEMES, applyColors, applyFontDensity, applyBgPattern,
                        applyBgEffectColor, applyBgEffectIntensity, applyBgEffectSize,
                        applyFrostedGlass,
+                       toggleMaisonMode, syncThemeModeToggle,
                        save, getSaved, saveCustomTheme, deleteCustomTheme,
                        getCustomThemes };
 
@@ -2042,6 +2155,11 @@ async function _initWithSync() {
       applyColors(serverTheme.colors);
     }
   }
+  if (!getSaved()) {
+    const colors = THEMES[DEFAULT_THEME];
+    applyColors(colors);
+    save(DEFAULT_THEME, colors, { font: DEFAULT_FONT, density: DEFAULT_DENSITY, bgPattern: 'none' });
+  }
   // Also sync custom themes from server
   try {
     const res = await fetch('/api/prefs/custom-themes', { credentials: 'same-origin' });
@@ -2057,6 +2175,7 @@ async function _initWithSync() {
     }
   } catch (e) { console.warn('Custom theme server sync failed:', e); }
   initThemeUI();
+  initThemeModeToggle();
 }
 
 if (document.readyState === 'loading') {

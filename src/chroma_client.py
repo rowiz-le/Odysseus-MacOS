@@ -28,10 +28,10 @@ def get_chroma_client():
     except ImportError as e:
         raise RuntimeError(
             "ChromaDB integration is not installed. Install the optional "
-            "dependency with: pip install chromadb-client"
+            "dependency with: pip install chromadb"
         ) from e
 
-    host = os.getenv("CHROMADB_HOST", "localhost")
+    host = os.getenv("CHROMADB_HOST", "127.0.0.1")
     port = int(os.getenv("CHROMADB_PORT", "8100"))
 
     _client = chromadb.HttpClient(host=host, port=port)

@@ -1,9 +1,16 @@
-# Odysseus
+# Odysseus Macos
 ───────────────────────────────────────────────
  ⊹ ࣪ ˖ ૮( ˶ᵔ ᵕ ᵔ˶ )っ  Odysseus vers. 1.0
 ───────────────────────────────────────────────
 
 ![Odysseus](docs/odysseus.jpg)
+
+Odysseus Macos is a macOS-focused remake of the Odysseus desktop experience,
+with a friendlier interface, app launcher, local-first workflow, and a
+drag-and-drop macOS distribution path.
+
+This project is based on the original Odysseus project by Pewdiepie:
+[pewdiepie-archdaemon/odysseus](https://github.com/pewdiepie-archdaemon/odysseus).
 
 A self-hosted AI workspace -- meant to be the self-hosted version of the UI experience you get from ChatGPT and Claude. But with more jank and fun. Running on your own hardware, with your own data -- local-first, privacy-first, and no trojan.
 
@@ -108,7 +115,19 @@ python setup.py            # creates data dirs and prints an initial admin passw
 uvicorn app:app --host 0.0.0.0 --port 7000
 ```
 
-### Option 3: Manual install — Windows (PowerShell)
+### Option 3: macOS app distribution
+To build a drag-and-drop macOS installer:
+
+```bash
+scripts/build_macos_distribution.sh
+```
+
+The output is `dist/Odysseus-macOS-<version>.dmg`. Drag `Odysseus.app` to
+Applications, then open it. On first launch the app bootstraps a private
+environment under `~/Library/Application Support/Odysseus`; Python 3.11+ must
+be installed on the target Mac for that bootstrap step.
+
+### Option 4: Manual install — Windows (PowerShell)
 ```powershell
 git clone <your-odysseus-repo-url>
 cd odysseus

@@ -737,6 +737,10 @@ import createResearchSynapse from './researchSynapse.js';
         isAgentMode = true;
       }
       fd.append('mode', isAgentMode ? 'agent' : 'chat');
+      if (isAgentMode) {
+        const runtime = (toggleState.agent_runtime || 'odysseus') === 'hermes' ? 'hermes' : 'odysseus';
+        fd.append('agent_runtime', runtime);
+      }
       if (el('web-toggle').checked) {
         if (isAgentMode) {
           fd.append('allow_web_search', 'true');

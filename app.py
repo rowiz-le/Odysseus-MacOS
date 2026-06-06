@@ -191,6 +191,15 @@ if AUTH_ENABLED:
             if LOCALHOST_BYPASS:
                 client_host = request.client.host if request.client else None
                 if client_host in ("127.0.0.1", "::1"):
+                    if os.getenv("ODYSSEUS_DESKTOP", "0").strip().lower() in ("1", "true", "yes", "on"):
+                        try:
+                            users = getattr(auth_manager, "users", {}) or {}
+                            admin_user = next((u for u, d in users.items() if d.get("is_admin")), None)
+                            request.state.current_user = admin_user or next(iter(users), "desktop")
+                            request.state.api_token = False
+                        except Exception:
+                            request.state.current_user = "desktop"
+                            request.state.api_token = False
                     return await call_next(request)
             if not auth_manager.is_configured:
                 # No users yet — redirect to login for first-time setup
@@ -928,6 +937,47 @@ async def startup_event():
         except Exception as e:
             logger.debug(f"Ollama auto-detect: {e}")
     _startup_tasks.append(asyncio.create_task(_detect_ollama()))
+
+    # Auto-detect LM Studio's OpenAI-compatible local server. This keeps the
+    # desktop app useful out of the box for users who already run LM Studio.
+    async def _detect_lm_studio():
+        try:
+            import httpx
+            async with httpx.AsyncClient() as client:
+                r = await client.get("http://localhost:1234/v1/models", timeout=3)
+                if r.status_code != 200:
+                    return
+                data = r.json()
+                models = [m.get("id") for m in (data.get("data") or []) if m.get("id")]
+            from core.database import SessionLocal, ModelEndpoint
+            db = SessionLocal()
+            try:
+                existing = db.query(ModelEndpoint).filter(
+                    ModelEndpoint.base_url == "http://localhost:1234/v1"
+                ).first()
+                if existing:
+                    if models:
+                        existing.cached_models = json.dumps(models)
+                    existing.is_enabled = True
+                    existing.name = existing.name or "LM Studio (local)"
+                else:
+                    ep = ModelEndpoint(
+                        id=str(uuid.uuid4())[:8],
+                        name="LM Studio (local)",
+                        base_url="http://localhost:1234/v1",
+                        api_key="lmstudio",
+                        is_enabled=True,
+                        cached_models=json.dumps(models),
+                        supports_tools=False,
+                    )
+                    db.add(ep)
+                db.commit()
+                logger.info("Auto-added/refreshed LM Studio endpoint (localhost:1234)")
+            finally:
+                db.close()
+        except Exception as e:
+            logger.debug(f"LM Studio auto-detect: {e}")
+    _startup_tasks.append(asyncio.create_task(_detect_lm_studio()))
     logger.info("Application startup complete")
 
 @app.on_event("shutdown")

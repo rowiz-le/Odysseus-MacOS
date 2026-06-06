@@ -549,11 +549,53 @@ def _get_email_config(account_id: str | None = None, owner: str = "") -> dict:
         "imap_starttls": settings.get("imap_starttls", True),
         "from_address": settings.get("email_from", os.environ.get("EMAIL_FROM", "")),
     }
-    if not (cfg["smtp_host"] and cfg["smtp_user"] and cfg["smtp_password"]):
+    has_any_mail_config = any(
+        cfg.get(key)
+        for key in ("smtp_host", "smtp_user", "smtp_password", "imap_host", "imap_user", "imap_password")
+    )
+    if has_any_mail_config and not (cfg["smtp_host"] and cfg["smtp_user"] and cfg["smtp_password"]):
         logger.warning("SMTP not configured — add an Email Account in Settings or set env vars")
-    if not (cfg["imap_host"] and cfg["imap_user"] and cfg["imap_password"]):
+    if has_any_mail_config and not (cfg["imap_host"] and cfg["imap_user"] and cfg["imap_password"]):
         logger.warning("IMAP not configured — add an Email Account in Settings or set env vars")
     return cfg
+
+
+def _has_configured_imap_account(account_id: str | None = None, owner: str = "") -> bool:
+    """Return True only when a real IMAP account/env config exists.
+
+    This lets UI/API list calls degrade quietly when Email has not been set up,
+    instead of attempting localhost:993 and logging connection refused.
+    """
+    import os
+    from core.database import SessionLocal as _SL, EmailAccount as _EA
+
+    def _row_ready(row) -> bool:
+        return bool(row and row.enabled and row.imap_host and row.imap_user and row.imap_password)
+
+    try:
+        db = _SL()
+        try:
+            q = db.query(_EA).filter(_EA.enabled == True)  # noqa: E712
+            if account_id:
+                q = q.filter(_EA.id == account_id)
+            if owner:
+                from sqlalchemy import and_, or_
+                unowned = or_(_EA.owner == None, _EA.owner == "")  # noqa: E711
+                same_mailbox = or_(_EA.imap_user == owner, _EA.from_address == owner)
+                q = q.filter(or_(_EA.owner == owner, and_(unowned, same_mailbox)))
+            if any(_row_ready(row) for row in q.all()):
+                return True
+        finally:
+            db.close()
+    except Exception as e:
+        logger.debug(f"email account readiness check failed: {e}")
+
+    settings = _load_settings()
+    return bool(
+        (settings.get("imap_host") or os.environ.get("IMAP_HOST"))
+        and (settings.get("imap_user") or os.environ.get("IMAP_USER"))
+        and (settings.get("imap_password") or os.environ.get("IMAP_PASSWORD"))
+    )
 
 
 def _list_email_accounts() -> list[dict]:

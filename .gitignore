@@ -8,6 +8,8 @@ build/
 !static/js/editor/build/
 venv/
 .venv/
+.venv311/
+.hermes-venv/
 *.egg
 
 # Environment
@@ -48,7 +50,19 @@ Thumbs.db
 # Build artifacts
 *.cache
 cache/
+.macos-build/
 output.txt.txt
+
+# Local side experiments / generated helper apps
+Deep-Live-Cam/
+Deep-Live-Cam.app/
+voice_changer_app/
+virtual-cam-bypass-extension/
+VoiceChanger.spec
+build_app.sh
+desktop_launcher.py
+run_deep_live_cam.sh
+run_voice_changer.sh
 
 # Media (uploaded/generated)
 *.jpg

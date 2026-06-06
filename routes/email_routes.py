@@ -40,6 +40,7 @@ from routes.email_helpers import (
     _strip_think, _extract_reply, _apply_email_style_mechanics, require_owner, require_user, _assert_owns_account,
     _q, _attach_compose_uploads, _cleanup_compose_uploads,
     _load_settings, _save_settings, _get_email_config,
+    _has_configured_imap_account,
     _send_smtp_message,
     _imap_connect, _imap, _decode_header, _detect_sent_folder, _detect_drafts_folder,
     _extract_attachment_text, _list_attachments_from_msg,
@@ -573,6 +574,14 @@ def setup_email_routes():
         SECURITY: `owner` is propagated so when `account_id` is missing,
         the fallback config lookup is scoped to this user's accounts only.
         """
+        if not _has_configured_imap_account(account_id, owner=owner):
+            return {
+                "emails": [],
+                "total": 0,
+                "folder": folder,
+                "offset": offset,
+                "configured": False,
+            }
         try:
             conn = _imap_connect(account_id, owner=owner)
             select_status, _ = conn.select(_q(folder), readonly=True)

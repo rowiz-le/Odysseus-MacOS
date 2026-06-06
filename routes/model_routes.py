@@ -15,7 +15,7 @@ from core.database import SessionLocal, ModelEndpoint
 from core.middleware import require_admin
 from src.llm_core import _detect_provider, ANTHROPIC_MODELS
 from src.settings import load_settings as _load_settings, save_settings as _save_settings
-from src.endpoint_resolver import normalize_base as _normalize_base, build_chat_url, build_headers, _anthropic_api_root
+from src.endpoint_resolver import normalize_base as _normalize_base, build_chat_url, build_headers
 from src.auth_helpers import owner_filter
 
 logger = logging.getLogger(__name__)
@@ -244,6 +244,15 @@ def _classify_endpoint(base_url: str) -> str:
     return "api"
 
 
+def _anthropic_models_url(base: str) -> str:
+    """Return the Anthropic models endpoint without duplicating /v1."""
+    base = (base or "").strip().rstrip("/")
+    host = urlparse(base).hostname or ""
+    if host.endswith("anthropic.com") and base.endswith("/v1"):
+        return base + "/models"
+    return base + "/v1/models"
+
+
 
 def _probe_endpoint(base_url: str, api_key: str = None, timeout: int = 5) -> List[str]:
     """Probe a base URL's /models endpoint and return list of model IDs.
@@ -252,7 +261,7 @@ def _probe_endpoint(base_url: str, api_key: str = None, timeout: int = 5) -> Lis
     base = resolve_url(_normalize_base(base_url))
     if _detect_provider(base) == "anthropic":
         # Try Anthropic's /v1/models endpoint first
-        url = _anthropic_api_root(base) + "/v1/models"
+        url = _anthropic_models_url(base)
         headers = {"anthropic-version": "2023-06-01"}
         if api_key:
             headers["x-api-key"] = api_key
