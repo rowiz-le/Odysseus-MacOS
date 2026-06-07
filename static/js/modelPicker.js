@@ -31,6 +31,8 @@ function _handlePickerKeydown(e, listEl, itemSelector, closeFn) {
 
 // Dependencies injected via initModelPicker()
 let _deps = null;
+let _pickerItems = [];
+let _pickerFetchPromise = null;
 
 /**
  * Initialize the model picker dropdown.
@@ -54,25 +56,37 @@ function _initModelPickerDropdown() {
   const listEl = document.getElementById('model-picker-list');
   if (!wrap || !btn || !menu || !search || !listEl) return;
 
+  let _closeTimer = null;
+  let _closeSeq = 0;
+
   function _close() {
     if (menu.classList.contains('hidden')) return;
+    const closeToken = ++_closeSeq;
     // Restore scroll button
     const _scrollBtn = document.getElementById('scroll-bottom-btn');
     if (_scrollBtn) _scrollBtn.style.display = '';
     menu.classList.add('closing');
     menu.addEventListener('animationend', function _onDone() {
       menu.removeEventListener('animationend', _onDone);
+      if (closeToken !== _closeSeq) return;
+      if (_closeTimer) {
+        clearTimeout(_closeTimer);
+        _closeTimer = null;
+      }
       menu.classList.remove('closing');
       menu.classList.add('hidden');
       search.value = '';
     }, { once: true });
     // Fallback if animationend doesn't fire
-    setTimeout(() => {
+    if (_closeTimer) clearTimeout(_closeTimer);
+    _closeTimer = setTimeout(() => {
+      if (closeToken !== _closeSeq) return;
       if (!menu.classList.contains('hidden')) {
         menu.classList.remove('closing');
         menu.classList.add('hidden');
         search.value = '';
       }
+      _closeTimer = null;
     }, 200);
   }
 
@@ -82,6 +96,44 @@ function _initModelPickerDropdown() {
   let _localProbe = {};            // {endpoint_id: {alive, latency_ms, error}}
   let _localProbeFetchedAt = 0;
   const _LOCAL_PROBE_TTL_MS = 5000;
+
+  function _cachedModelItems() {
+    return (window.modelsModule && window.modelsModule.getCachedItems)
+      ? (window.modelsModule.getCachedItems() || [])
+      : [];
+  }
+
+  function _showPickerStatus(text) {
+    listEl.innerHTML = '';
+    const row = document.createElement('div');
+    row.className = 'model-switch-empty';
+    row.textContent = text;
+    listEl.appendChild(row);
+  }
+
+  async function _ensurePickerItems() {
+    const cached = _cachedModelItems();
+    if (cached.length > 0) {
+      _pickerItems = [];
+      return cached;
+    }
+    if (_pickerFetchPromise) return _pickerFetchPromise;
+    _pickerFetchPromise = (async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/models`, { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        _pickerItems = Array.isArray(data.items) ? data.items : [];
+        return _pickerItems;
+      } catch (e) {
+        console.warn('Model picker failed to load models:', e);
+        return _cachedModelItems();
+      } finally {
+        _pickerFetchPromise = null;
+      }
+    })();
+    return _pickerFetchPromise;
+  }
 
   async function _refreshLocalProbe() {
     const now = Date.now();
@@ -94,7 +146,8 @@ function _initModelPickerDropdown() {
   }
 
   function _getAllModels() {
-    const items = (window.modelsModule && window.modelsModule.getCachedItems) ? window.modelsModule.getCachedItems() : [];
+    const cached = _cachedModelItems();
+    const items = cached.length > 0 ? cached : _pickerItems;
     const result = [];
     const seen = new Set();
     items.forEach(item => {
@@ -230,14 +283,24 @@ function _initModelPickerDropdown() {
       fd.append('endpoint_url', m.url);
       if (m.endpointId) fd.append('endpoint_id', m.endpointId);
       try {
-        const res = await fetch(`${API_BASE}/api/session/${currentSessionId}`, { method: 'PATCH', body: fd });
+        const res = await fetch(`${API_BASE}/api/session/${currentSessionId}`, {
+          method: 'PATCH',
+          body: fd,
+          credentials: 'same-origin',
+        });
         if (!res.ok) {
           uiModule.showError('Failed to set model');
           return;
         }
+        let payload = {};
+        try { payload = await res.json(); } catch {}
         const sessions = _deps.getSessions();
         const s = sessions.find(x => x.id === currentSessionId);
-        if (s) { s.model = m.mid; s.endpoint_url = m.url; }
+        if (s) {
+          s.model = payload.model || m.mid;
+          s.endpoint_url = payload.endpoint_url || m.url;
+          if (payload.endpoint_id || m.endpointId) s.endpoint_id = payload.endpoint_id || m.endpointId;
+        }
         // Header stays as session name — model info shown in picker only
       } catch (e) {
         uiModule.showError('Failed to set model: ' + e);
@@ -253,12 +316,19 @@ function _initModelPickerDropdown() {
     e.stopPropagation();
     if (menu.classList.contains('hidden') || menu.classList.contains('closing')) {
       // Force-clear any in-progress close animation
+      _closeSeq++;
+      if (_closeTimer) {
+        clearTimeout(_closeTimer);
+        _closeTimer = null;
+      }
       menu.classList.remove('closing', 'hidden');
-      _populate('');
+      const hasModels = _cachedModelItems().length > 0 || _pickerItems.length > 0;
+      if (hasModels) _populate('');
+      else _showPickerStatus('Loading models...');
       // Kick off a local-endpoint probe — when it returns, re-render
       // the list so stale local servers get dimmed. Cloud entries
       // aren't probed; they stay visible.
-      _refreshLocalProbe().then(() => {
+      Promise.allSettled([_ensurePickerItems(), _refreshLocalProbe()]).then(() => {
         if (!menu.classList.contains('hidden')) _populate(search.value || '');
       });
       if (window.innerWidth >= 768) search.focus();
@@ -270,13 +340,22 @@ function _initModelPickerDropdown() {
     }
   });
 
-  search.addEventListener('input', () => _populate(search.value));
+  search.addEventListener('input', () => {
+    if (_cachedModelItems().length === 0 && _pickerItems.length === 0) {
+      _showPickerStatus('Loading models...');
+      _ensurePickerItems().then(() => {
+        if (!menu.classList.contains('hidden')) _populate(search.value || '');
+      });
+      return;
+    }
+    _populate(search.value);
+  });
   search.addEventListener('click', (e) => e.stopPropagation());
   search.addEventListener('keydown', (e) => {
     _handlePickerKeydown(e, listEl, '.model-switch-item', _close);
   });
   document.addEventListener('click', (e) => {
-    if (!menu.classList.contains('hidden') && !menu.contains(e.target) && e.target !== btn) {
+    if (!menu.classList.contains('hidden') && !menu.contains(e.target) && !btn.contains(e.target)) {
       _close();
     }
   });
