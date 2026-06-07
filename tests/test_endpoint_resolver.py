@@ -1,5 +1,7 @@
 """Tests for endpoint_resolver — pure functions tested directly to avoid import pollution."""
+import importlib.util
 import re
+from pathlib import Path
 from urllib.parse import urlparse
 
 
@@ -37,6 +39,14 @@ def build_headers(api_key, base: str) -> dict:
     if provider == "anthropic":
         return {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
     return {"Authorization": f"Bearer {api_key}"}
+
+
+def _load_real_endpoint_resolver():
+    path = Path(__file__).resolve().parents[1] / "src" / "endpoint_resolver.py"
+    spec = importlib.util.spec_from_file_location("_real_endpoint_resolver_for_test", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 class TestNormalizeBase:
@@ -91,3 +101,70 @@ class TestBuildHeaders:
 
     def test_empty_key(self):
         assert build_headers("", "https://api.openai.com/v1") == {}
+
+
+class TestChatFallbackTargetGuard:
+    def test_non_default_chat_target_gets_no_default_fallbacks(self, monkeypatch):
+        resolver = _load_real_endpoint_resolver()
+        import src.settings as settings
+
+        monkeypatch.setattr(settings, "load_settings", lambda: {
+            "default_endpoint_id": "gatecheap",
+            "default_model": "gpt-5.5",
+            "default_model_fallbacks": [{"endpoint_id": "gatecheap", "model": "claude-opus-4-8"}],
+        })
+        monkeypatch.setattr(settings, "get_user_setting", lambda key, owner, default=None: default)
+        monkeypatch.setattr(
+            resolver,
+            "resolve_endpoint_by_id",
+            lambda ep_id, model, owner=None: (
+                "https://gatecheap.io.vn/v1/chat/completions",
+                "gpt-5.5",
+                {},
+            ),
+        )
+        monkeypatch.setattr(
+            resolver,
+            "_resolve_fallback_candidates",
+            lambda setting_key, owner=None: [(
+                "https://gatecheap.io.vn/v1/chat/completions",
+                "claude-opus-4-8",
+                {},
+            )],
+        )
+
+        assert resolver.resolve_chat_fallback_candidates(
+            current_url="https://gatecheap.io.vn/v1/chat/completions",
+            current_model="deepseek-v4-flash",
+        ) == []
+
+    def test_default_chat_target_keeps_default_fallbacks(self, monkeypatch):
+        resolver = _load_real_endpoint_resolver()
+        import src.settings as settings
+
+        fallback = [(
+            "https://gatecheap.io.vn/v1/chat/completions",
+            "claude-opus-4-8",
+            {},
+        )]
+        monkeypatch.setattr(settings, "load_settings", lambda: {
+            "default_endpoint_id": "gatecheap",
+            "default_model": "gpt-5.5",
+            "default_model_fallbacks": [{"endpoint_id": "gatecheap", "model": "claude-opus-4-8"}],
+        })
+        monkeypatch.setattr(settings, "get_user_setting", lambda key, owner, default=None: default)
+        monkeypatch.setattr(
+            resolver,
+            "resolve_endpoint_by_id",
+            lambda ep_id, model, owner=None: (
+                "https://gatecheap.io.vn/v1/chat/completions",
+                "gpt-5.5",
+                {},
+            ),
+        )
+        monkeypatch.setattr(resolver, "_resolve_fallback_candidates", lambda setting_key, owner=None: fallback)
+
+        assert resolver.resolve_chat_fallback_candidates(
+            current_url="https://gatecheap.io.vn/v1/chat/completions",
+            current_model="gpt-5.5",
+        ) == fallback

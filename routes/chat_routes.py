@@ -841,7 +841,11 @@ def setup_chat_routes(
             # output. Resolved once per request.
             try:
                 from src.endpoint_resolver import resolve_chat_fallback_candidates
-                _fallback_candidates = resolve_chat_fallback_candidates(owner=_user)
+                _fallback_candidates = resolve_chat_fallback_candidates(
+                    owner=_user,
+                    current_url=sess.endpoint_url,
+                    current_model=sess.model,
+                )
             except Exception:
                 _fallback_candidates = []
 

@@ -341,13 +341,56 @@ def resolve_endpoint_by_id(
         db.close()
 
 
-def resolve_chat_fallback_candidates(owner: Optional[str] = None) -> list:
+def _chat_target_matches_default(
+    current_url: Optional[str],
+    current_model: Optional[str],
+    owner: Optional[str] = None,
+) -> bool:
+    """Return true when the live session target is the configured default chat model.
+
+    Default-chat fallbacks are a safety net for the default model only. A user
+    who explicitly starts a session with another model expects that exact model;
+    silently answering with the default fallback makes a broken selected model
+    look like it succeeded.
+    """
+    if not current_url or not current_model:
+        return False
+    try:
+        from src.settings import get_user_setting, load_settings
+        settings = load_settings()
+        owner_str = owner or ""
+        default_ep = (get_user_setting("default_endpoint_id", owner_str, settings.get("default_endpoint_id", "")) or "").strip()
+        default_model = (get_user_setting("default_model", owner_str, settings.get("default_model", "")) or "").strip()
+    except Exception:
+        return False
+    if not default_ep:
+        return False
+    resolved = resolve_endpoint_by_id(default_ep, default_model, owner=owner)
+    if not resolved:
+        return False
+    default_url, resolved_model, _headers = resolved
+    return (
+        normalize_base(current_url) == normalize_base(default_url)
+        and (current_model or "").strip() == (resolved_model or "").strip()
+    )
+
+
+def resolve_chat_fallback_candidates(
+    owner: Optional[str] = None,
+    current_url: Optional[str] = None,
+    current_model: Optional[str] = None,
+) -> list:
     """Build the configured default-chat fallback chain as a list of
     (chat_url, model, headers) tuples, skipping any that can't resolve.
 
-    The primary model is NOT included — callers prepend their session's
-    current (url, model, headers) so per-session model overrides are honored.
+    When `current_url`/`current_model` are supplied, only return the chain if
+    that target is the configured default chat model. Manual per-session model
+    picks should fail honestly instead of silently jumping to a fallback.
+
+    The primary model is NOT included — callers prepend the live session target.
     """
+    if (current_url or current_model) and not _chat_target_matches_default(current_url, current_model, owner=owner):
+        return []
     return _resolve_fallback_candidates("default_model_fallbacks", owner=owner)
 
 
