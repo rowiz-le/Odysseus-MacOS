@@ -386,6 +386,55 @@ def test_auth_manager_migrates_legacy_admin_role(tmp_path):
     assert data["users"]["admin"]["is_admin"] is True
 
 
+def test_auth_manager_self_rename_requires_explicit_allowance(tmp_path):
+    sys.modules.pop("core.auth", None)
+    if "core" in sys.modules and hasattr(sys.modules["core"], "auth"):
+        delattr(sys.modules["core"], "auth")
+    from core.auth import AuthManager
+
+    mgr = AuthManager(str(tmp_path / "auth.json"))
+    assert mgr.create_user("alice", "password123", is_admin=False)
+
+    assert mgr.rename_user("alice", "eve", "alice") is False
+    assert mgr.rename_user("alice", "eve", "alice", allow_self=True) is True
+    assert "alice" not in mgr.users
+    assert "eve" in mgr.users
+
+
+def test_auth_manager_refuses_reserved_self_rename(tmp_path):
+    sys.modules.pop("core.auth", None)
+    if "core" in sys.modules and hasattr(sys.modules["core"], "auth"):
+        delattr(sys.modules["core"], "auth")
+    from core.auth import AuthManager
+
+    mgr = AuthManager(str(tmp_path / "auth.json"))
+    assert mgr.create_user("alice", "password123", is_admin=False)
+
+    assert mgr.rename_user("alice", "internal-tool", "alice", allow_self=True) is False
+    assert "alice" in mgr.users
+    assert "internal-tool" not in mgr.users
+
+
+def test_auth_manager_set_password_is_scoped(tmp_path):
+    sys.modules.pop("core.auth", None)
+    if "core" in sys.modules and hasattr(sys.modules["core"], "auth"):
+        delattr(sys.modules["core"], "auth")
+    from core.auth import AuthManager
+
+    mgr = AuthManager(str(tmp_path / "auth.json"))
+    assert mgr.create_user("alice", "password123", is_admin=False)
+    assert mgr.create_user("admin", "adminpass123", is_admin=True)
+
+    assert mgr.set_password("alice", "newpass123", "mallory", allow_self=True) is False
+    assert mgr.verify_password("alice", "password123") is True
+
+    assert mgr.set_password("alice", "newpass123", "alice", allow_self=True) is True
+    assert mgr.verify_password("alice", "newpass123") is True
+
+    assert mgr.set_password("alice", "adminset123", "admin") is True
+    assert mgr.verify_password("alice", "adminset123") is True
+
+
 def _load_search_content_for_test(monkeypatch, name="services.search.content_under_test"):
     import importlib.util
     import types as _types

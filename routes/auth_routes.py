@@ -7,7 +7,7 @@ import asyncio
 import logging
 import os
 
-from core.auth import AuthManager
+from core.auth import AuthManager, RESERVED_USERNAMES
 from src.rate_limiter import RateLimiter
 from src.settings_scrub import scrub_settings
 from src.settings import (
@@ -50,8 +50,12 @@ class SignupRequest(BaseModel):
 
 
 class ChangePasswordRequest(BaseModel):
-    current_password: str
+    current_password: str = ""
     new_password: str
+
+
+class UpdateProfileRequest(BaseModel):
+    username: Optional[str] = None
 
 
 class CreateUserRequest(BaseModel):
@@ -80,12 +84,132 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
     _signup_limiter = RateLimiter(max_requests=3, window_seconds=300)
     _setup_limiter = RateLimiter(max_requests=3, window_seconds=300)
 
+    _PROXY_FWD_HEADERS = (
+        "cf-connecting-ip", "cf-ray", "cf-visitor",
+        "x-forwarded-for", "x-forwarded-host", "x-real-ip", "forwarded",
+    )
+
+    def _is_trusted_loopback(request: Request) -> bool:
+        host = request.client.host if request.client else None
+        if host not in ("127.0.0.1", "::1"):
+            return False
+        return not any(request.headers.get(h) for h in _PROXY_FWD_HEADERS)
+
+    def _is_desktop_local_bypass(request: Request) -> bool:
+        if os.getenv("LOCALHOST_BYPASS", "false").lower() != "true":
+            return False
+        if os.getenv("ODYSSEUS_DESKTOP", "0").strip().lower() not in ("1", "true", "yes", "on"):
+            return False
+        return _is_trusted_loopback(request)
+
+    def _local_bypass_user(request: Request) -> Optional[str]:
+        if not _is_desktop_local_bypass(request):
+            return None
+        users = auth_manager.users or {}
+        return next((u for u, d in users.items() if d.get("is_admin")), None) or next(iter(users), None)
+
     def _get_current_user(request: Request) -> Optional[str]:
         token = request.cookies.get(SESSION_COOKIE)
-        return auth_manager.get_username_for_token(token)
+        user = auth_manager.get_username_for_token(token)
+        if user:
+            return user
+        state_user = getattr(getattr(request, "state", None), "current_user", None)
+        if state_user in auth_manager.users:
+            return state_user
+        return _local_bypass_user(request)
+
+    def _session_cookie_kwargs(token: str, remember: bool = True) -> dict:
+        kwargs = dict(
+            key=SESSION_COOKIE,
+            value=token,
+            httponly=True,
+            samesite="lax",
+            secure=os.getenv("SECURE_COOKIES", "false").lower() == "true",
+            path="/",
+        )
+        if remember:
+            kwargs["max_age"] = 60 * 60 * 24 * 7
+        return kwargs
+
+    def _rename_owner_references(old_username: str, new_username: str) -> None:
+        """Move common owner-scoped data rows to the renamed account."""
+        try:
+            from sqlalchemy import func
+            from core.database import Base, SessionLocal
+            db = SessionLocal()
+            try:
+                for mapper in Base.registry.mappers:
+                    model = mapper.class_
+                    if not hasattr(model, "owner"):
+                        continue
+                    (
+                        db.query(model)
+                        .filter(func.lower(model.owner) == old_username)
+                        .update({"owner": new_username}, synchronize_session=False)
+                    )
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+        except Exception as e:
+            logger.error("Failed to rename owner references %s -> %s: %s", old_username, new_username, e)
+            raise HTTPException(500, "Failed to rename user data")
+
+        try:
+            from routes.prefs_routes import _load as _load_prefs, _save as _save_prefs
+            prefs = _load_prefs()
+            users = prefs.get("_users") if isinstance(prefs, dict) else None
+            if isinstance(users, dict):
+                prefs_key = next(
+                    (k for k in users if str(k).strip().lower() == old_username),
+                    None,
+                )
+                new_taken = any(str(k).strip().lower() == new_username for k in users)
+                if prefs_key is not None and not new_taken:
+                    users[new_username] = users.pop(prefs_key)
+                    _save_prefs(prefs)
+        except Exception as e:
+            logger.warning("Failed to rename user prefs %s -> %s: %s", old_username, new_username, e)
+
+    def _invalidate_api_token_cache(request: Request) -> None:
+        invalidator = getattr(request.app.state, "invalidate_token_cache", None)
+        if callable(invalidator):
+            invalidator()
+
+    def _validate_rename(old_username: str, new_username: str) -> None:
+        if not new_username:
+            raise HTTPException(400, "Username required")
+        if new_username in RESERVED_USERNAMES:
+            raise HTTPException(400, "Username is reserved")
+        if old_username not in auth_manager.users:
+            raise HTTPException(404, "User not found")
+        if new_username in auth_manager.users:
+            raise HTTPException(409, "Username already taken")
+
+    async def _rename_user_everywhere(
+        old_username: str,
+        new_username: str,
+        actor: str,
+        request: Request,
+        *,
+        allow_self: bool = False,
+    ) -> dict:
+        old_username = (old_username or "").strip().lower()
+        new_username = (new_username or "").strip().lower()
+        if old_username == new_username:
+            return {"ok": True, "username": new_username, "renamed_self": old_username == actor}
+        _validate_rename(old_username, new_username)
+        await asyncio.to_thread(_rename_owner_references, old_username, new_username)
+        ok = await asyncio.to_thread(auth_manager.rename_user, old_username, new_username, actor, allow_self)
+        if not ok:
+            raise HTTPException(400, "Cannot rename user")
+        _invalidate_api_token_cache(request)
+        return {"ok": True, "username": new_username, "renamed_self": old_username == actor}
 
     @router.post("/setup")
-    async def first_run_setup(body: SetupRequest, request: Request):
+    async def first_run_setup(body: SetupRequest, request: Request, response: Response):
         """Create initial admin account. Only works if no accounts exist."""
         if not _setup_limiter.check(request.client.host):
             raise HTTPException(429, "Too many requests — try again later")
@@ -96,7 +220,11 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         ok = await asyncio.to_thread(auth_manager.setup, body.username, body.password)
         if not ok:
             raise HTTPException(500, "Setup failed")
-        return {"ok": True, "message": "Admin account created"}
+        username = body.username.strip().lower()
+        token = await asyncio.to_thread(auth_manager.create_session, username, body.password)
+        if token:
+            response.set_cookie(**_session_cookie_kwargs(token, remember=True))
+        return {"ok": True, "message": "Admin account created", "username": username}
 
     @router.post("/signup")
     async def signup(body: SignupRequest, request: Request):
@@ -135,17 +263,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         token = await asyncio.to_thread(auth_manager.create_session, username, body.password)
         if not token:
             raise HTTPException(401, "Invalid credentials")
-        cookie_kwargs = dict(
-            key=SESSION_COOKIE,
-            value=token,
-            httponly=True,
-            samesite="lax",
-            secure=os.getenv("SECURE_COOKIES", "false").lower() == "true",
-            path="/",
-        )
-        if body.remember:
-            cookie_kwargs["max_age"] = 60 * 60 * 24 * 7  # 7 days
-        response.set_cookie(**cookie_kwargs)
+        response.set_cookie(**_session_cookie_kwargs(token, remember=body.remember))
         return {"ok": True, "username": username}
 
     @router.post("/logout")
@@ -160,6 +278,16 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
     async def auth_status(request: Request):
         token = request.cookies.get(SESSION_COOKIE)
         result = auth_manager.status(token)
+        if not result.get("authenticated"):
+            bypass_user = _local_bypass_user(request)
+            if bypass_user:
+                result = {
+                    "configured": auth_manager.is_configured,
+                    "authenticated": True,
+                    "username": bypass_user,
+                    "is_admin": auth_manager.is_admin(bypass_user),
+                    "local_bypass": True,
+                }
         result["signup_enabled"] = auth_manager.signup_enabled
         # Include the caller's effective privileges so the frontend can
         # hide / dim UI controls the user isn't allowed to use. Admins get
@@ -181,11 +309,24 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         if len(body.new_password) < 8:
             raise HTTPException(400, "Password must be at least 8 characters")
         current_token = request.cookies.get(SESSION_COOKIE)
-        ok = await asyncio.to_thread(auth_manager.change_password, user, body.current_password, body.new_password)
+        if _is_desktop_local_bypass(request):
+            ok = await asyncio.to_thread(auth_manager.set_password, user, body.new_password, user, True)
+        else:
+            if not body.current_password:
+                raise HTTPException(400, "Current password is required")
+            ok = await asyncio.to_thread(auth_manager.change_password, user, body.current_password, body.new_password)
         if not ok:
             raise HTTPException(400, "Current password is incorrect")
         await asyncio.to_thread(auth_manager.revoke_user_sessions, user, current_token)
         return {"ok": True}
+
+    @router.put("/profile")
+    async def update_profile(body: UpdateProfileRequest, request: Request):
+        user = _get_current_user(request)
+        if not user:
+            raise HTTPException(401, "Not authenticated")
+        new_username = (body.username or user).strip().lower()
+        return await _rename_user_everywhere(user, new_username, user, request, allow_self=True)
 
     # ------------------------------------------------------------------
     # Two-factor authentication
@@ -288,67 +429,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             raise HTTPException(400, "Username required")
         if old_username == new_username:
             return {"ok": True, "username": new_username, "renamed_self": old_username == user}
-        if old_username not in auth_manager.users:
-            raise HTTPException(404, "User not found")
-        if new_username in auth_manager.users:
-            raise HTTPException(409, "Username already taken")
-
-        # Usernames are ownership keys for user data. Rename the common
-        # owner-scoped DB rows before changing auth so the account keeps
-        # access to its sessions, docs, email accounts, tasks, etc.
-        try:
-            from sqlalchemy import func
-            from core.database import Base, SessionLocal
-            db = SessionLocal()
-            try:
-                for mapper in Base.registry.mappers:
-                    model = mapper.class_
-                    if not hasattr(model, "owner"):
-                        continue
-                    (
-                        db.query(model)
-                        .filter(func.lower(model.owner) == old_username)
-                        .update({"owner": new_username}, synchronize_session=False)
-                    )
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
-            finally:
-                db.close()
-        except Exception as e:
-            logger.error("Failed to rename owner references %s -> %s: %s", old_username, new_username, e)
-            raise HTTPException(500, "Failed to rename user data")
-
-        # Per-user prefs are JSON-backed, not SQL-backed.
-        try:
-            from routes.prefs_routes import _load as _load_prefs, _save as _save_prefs
-            prefs = _load_prefs()
-            users = prefs.get("_users") if isinstance(prefs, dict) else None
-            if isinstance(users, dict):
-                prefs_key = next(
-                    (k for k in users if str(k).strip().lower() == old_username),
-                    None,
-                )
-                new_taken = any(str(k).strip().lower() == new_username for k in users)
-                if prefs_key is not None and not new_taken:
-                    users[new_username] = users.pop(prefs_key)
-                    _save_prefs(prefs)
-        except Exception as e:
-            logger.warning("Failed to rename user prefs %s -> %s: %s", old_username, new_username, e)
-
-        ok = auth_manager.rename_user(old_username, new_username, user)
-        if not ok:
-            raise HTTPException(400, "Cannot rename user")
-        # The owner-rename loop above updated ApiToken.owner in the DB, but the
-        # bearer-token cache still maps each token to the OLD owner. Without
-        # refreshing it, the renamed user's API tokens resolve to the old (now
-        # non-existent) owner and stop reaching their data until the cache next
-        # goes dirty. Invalidate it now, like the token CRUD routes do.
-        invalidator = getattr(request.app.state, "invalidate_token_cache", None)
-        if callable(invalidator):
-            invalidator()
-        return {"ok": True, "username": new_username, "renamed_self": old_username == user}
+        return await _rename_user_everywhere(old_username, new_username, user, request)
 
     @router.post("/signup-toggle", deprecated=True)
     async def toggle_signup(request: Request):

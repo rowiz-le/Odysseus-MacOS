@@ -1866,49 +1866,181 @@ async function initShortcuts() {
    INIT & REFRESH
    ═══════════════════════════════════════════ */
 function initAccount() {
-  // Populate user info
-  fetch('/api/auth/status', { credentials: 'same-origin' })
-    .then(r => r.json())
-    .then(d => {
-      const nameEl = el('settings-account-username');
-      const roleEl = el('settings-account-role');
-      const avatarEl = el('settings-account-avatar');
-      if (nameEl) nameEl.textContent = d.username || 'Unknown';
-      if (roleEl) roleEl.textContent = d.is_admin ? 'Admin' : 'User';
-      if (avatarEl) {
-        const initial = (d.username || '?')[0].toUpperCase();
-        avatarEl.textContent = initial;
-      }
-    }).catch(() => {});
+  let accountStatus = { configured: true, authenticated: false, local_bypass: false };
 
-  // Change password
+  const setMsg = (node, text, color = '') => {
+    if (!node) return;
+    node.textContent = text || '';
+    node.style.color = color;
+  };
+
+  const displayUsername = (username) => {
+    let displayName = username || 'Unknown';
+    if (displayName.includes('@')) {
+      const [local, domain] = displayName.split('@');
+      const ext = domain.includes('.') ? domain.slice(domain.lastIndexOf('.')) : '';
+      displayName = `${local.charAt(0)}•••@••••${ext}`;
+    }
+    return displayName;
+  };
+
+  const refreshUserChrome = (username, isAdmin) => {
+    const nameEl = el('settings-account-username');
+    const roleEl = el('settings-account-role');
+    const avatarEl = el('settings-account-avatar');
+    const userBarName = el('user-bar-name');
+    const userBarAvatar = el('user-bar-avatar');
+    const userBarAdmin = el('user-bar-admin');
+    if (nameEl) nameEl.textContent = displayUsername(username);
+    if (roleEl) roleEl.textContent = isAdmin ? 'Admin' : 'User';
+    if (avatarEl) avatarEl.textContent = (username || '?').charAt(0).toUpperCase();
+    if (userBarName && username) userBarName.textContent = displayUsername(username);
+    if (userBarAvatar && username) userBarAvatar.textContent = username.charAt(0).toUpperCase();
+    if (userBarAdmin && isAdmin) userBarAdmin.style.display = '';
+    window._isAdmin = !!isAdmin;
+  };
+
+  const setAccountUiState = (d) => {
+    accountStatus = d || accountStatus;
+    const configured = !!accountStatus.configured;
+    const authenticated = !!accountStatus.authenticated && !!accountStatus.username;
+    const localBypass = !!accountStatus.local_bypass;
+    const loginBtn = el('settings-login-btn');
+    const logoutBtn = el('settings-logout-btn');
+    const profileForm = el('settings-profile-form');
+    const setupCard = el('settings-initial-account-card');
+    const pwCard = el('settings-pw-card');
+    const tfaCard = el('settings-2fa-card');
+    const statusEl = el('settings-account-status');
+    const pwTitle = el('settings-pw-title');
+    const currentPw = el('settings-pw-current');
+    const pwSaveBtn = el('settings-pw-save');
+
+    refreshUserChrome(accountStatus.username, accountStatus.is_admin);
+    if (el('settings-profile-username')) el('settings-profile-username').value = accountStatus.username || '';
+
+    if (loginBtn) loginBtn.style.display = configured && !authenticated ? '' : 'none';
+    if (logoutBtn) logoutBtn.style.display = authenticated && !localBypass ? 'inline-flex' : 'none';
+    if (profileForm) profileForm.style.display = authenticated ? '' : 'none';
+    if (setupCard) setupCard.style.display = !configured ? '' : 'none';
+    if (pwCard) pwCard.style.display = authenticated ? '' : 'none';
+    if (tfaCard) tfaCard.style.display = authenticated && !localBypass ? '' : 'none';
+    if (pwTitle) pwTitle.lastChild.textContent = localBypass ? 'Set Password' : 'Change Password';
+    if (pwSaveBtn) pwSaveBtn.textContent = localBypass ? 'Set Password' : 'Update Password';
+    if (currentPw) currentPw.style.display = localBypass ? 'none' : '';
+
+    if (!configured) {
+      setMsg(statusEl, 'Create your local admin account first.');
+    } else if (!authenticated) {
+      setMsg(statusEl, 'Not signed in.');
+    } else if (localBypass) {
+      setMsg(statusEl, 'macOS desktop local session.');
+    } else {
+      setMsg(statusEl, '');
+    }
+  };
+
+  const loadAccountStatus = async () => {
+    try {
+      const res = await fetch('/api/auth/status', { credentials: 'same-origin' });
+      const d = await res.json();
+      setAccountUiState(d);
+    } catch (_) {
+      setAccountUiState({ configured: true, authenticated: false, username: null, is_admin: false });
+    }
+  };
+
+  loadAccountStatus();
+
+  const loginBtn = el('settings-login-btn');
+  if (loginBtn) loginBtn.addEventListener('click', () => { window.location.href = '/login'; });
+
+  const profileSaveBtn = el('settings-profile-save');
+  const profileMsg = el('settings-profile-msg');
+  if (profileSaveBtn) {
+    profileSaveBtn.addEventListener('click', async () => {
+      const username = (el('settings-profile-username')?.value || '').trim().toLowerCase();
+      setMsg(profileMsg, '');
+      if (!username) { setMsg(profileMsg, 'Username required', 'var(--red)'); return; }
+      profileSaveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/profile', {
+          method: 'PUT',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username })
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || 'Failed');
+        setMsg(profileMsg, 'Username saved', 'var(--green)');
+        accountStatus.username = d.username;
+        refreshUserChrome(d.username, accountStatus.is_admin);
+      } catch (e) {
+        setMsg(profileMsg, e.message, 'var(--red)');
+      } finally {
+        profileSaveBtn.disabled = false;
+      }
+    });
+  }
+
+  const setupSaveBtn = el('settings-setup-save');
+  const setupMsg = el('settings-setup-msg');
+  if (setupSaveBtn) {
+    setupSaveBtn.addEventListener('click', async () => {
+      const username = (el('settings-setup-username')?.value || '').trim().toLowerCase();
+      const password = el('settings-setup-password')?.value || '';
+      const confirm = el('settings-setup-confirm')?.value || '';
+      setMsg(setupMsg, '');
+      if (!username) { setMsg(setupMsg, 'Username required', 'var(--red)'); return; }
+      if (password.length < 8) { setMsg(setupMsg, 'Min 8 characters', 'var(--red)'); return; }
+      if (password !== confirm) { setMsg(setupMsg, 'Passwords don\'t match', 'var(--red)'); return; }
+      setupSaveBtn.disabled = true;
+      try {
+        const res = await fetch('/api/auth/setup', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password })
+        });
+        const d = await res.json();
+        if (!res.ok) throw new Error(d.detail || 'Failed');
+        setMsg(setupMsg, 'Account created', 'var(--green)');
+        await loadAccountStatus();
+      } catch (e) {
+        setMsg(setupMsg, e.message, 'var(--red)');
+      } finally {
+        setupSaveBtn.disabled = false;
+      }
+    });
+  }
+
+  // Change/set password
   const saveBtn = el('settings-pw-save');
   const msgEl = el('settings-pw-msg');
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
+      const localBypass = !!accountStatus.local_bypass;
       const cur = el('settings-pw-current').value;
       const nw = el('settings-pw-new').value;
       const conf = el('settings-pw-confirm').value;
-      msgEl.style.color = '';
-      if (!cur || !nw) { msgEl.textContent = 'Fill in all fields'; msgEl.style.color = 'var(--red)'; return; }
-      if (nw.length < 8) { msgEl.textContent = 'Min 8 characters'; msgEl.style.color = 'var(--red)'; return; }
-      if (nw !== conf) { msgEl.textContent = 'Passwords don\'t match'; msgEl.style.color = 'var(--red)'; return; }
+      setMsg(msgEl, '');
+      if ((!localBypass && !cur) || !nw) { setMsg(msgEl, 'Fill in all fields', 'var(--red)'); return; }
+      if (nw.length < 8) { setMsg(msgEl, 'Min 8 characters', 'var(--red)'); return; }
+      if (nw !== conf) { setMsg(msgEl, 'Passwords don\'t match', 'var(--red)'); return; }
       saveBtn.disabled = true;
       try {
         const res = await fetch('/api/auth/change-password', {
           method: 'POST', credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ current_password: cur, new_password: nw })
+          body: JSON.stringify({ current_password: localBypass ? '' : cur, new_password: nw })
         });
         if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Failed'); }
-        msgEl.style.color = 'var(--green)';
-        msgEl.textContent = 'Password updated';
+        setMsg(msgEl, localBypass ? 'Password set' : 'Password updated', 'var(--green)');
         el('settings-pw-current').value = '';
         el('settings-pw-new').value = '';
         el('settings-pw-confirm').value = '';
       } catch (e) {
-        msgEl.style.color = 'var(--red)';
-        msgEl.textContent = e.message;
+        setMsg(msgEl, e.message, 'var(--red)');
       } finally {
         saveBtn.disabled = false;
       }

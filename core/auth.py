@@ -256,8 +256,12 @@ class AuthManager:
         logger.info(f"Deleted user '{username}' (by {requesting_user}); revoked {revoked} active session(s)")
         return True
 
-    def rename_user(self, old_username: str, new_username: str, requesting_user: str) -> bool:
-        """Rename a user in auth config and active sessions. Admin only."""
+    def rename_user(self, old_username: str, new_username: str, requesting_user: str, allow_self: bool = False) -> bool:
+        """Rename a user in auth config and active sessions.
+
+        Admins can rename any user. When allow_self=True, a signed-in user can
+        rename only their own account.
+        """
         old_username = old_username.strip().lower()
         new_username = new_username.strip().lower()
         requesting_user = (requesting_user or "").strip().lower()
@@ -270,7 +274,8 @@ class AuthManager:
             return False
         if new_username in self.users:
             return False
-        if not self.users.get(requesting_user, {}).get("is_admin"):
+        is_admin = self.users.get(requesting_user, {}).get("is_admin")
+        if not is_admin and not (allow_self and requesting_user == old_username):
             return False
         self._config.setdefault("users", {})[new_username] = self._config["users"].pop(old_username)
         self._save()
@@ -288,6 +293,25 @@ class AuthManager:
             "Renamed user '%s' -> '%s' (by %s); updated %d active session(s)",
             old_username, new_username, requesting_user, renamed_sessions,
         )
+        return True
+
+    def set_password(self, username: str, new_password: str, requesting_user: str, allow_self: bool = False) -> bool:
+        """Set a user's password without verifying the current password.
+
+        This is intentionally stricter than change_password: only admins can set
+        arbitrary users' passwords, and allow_self=True is required for a user
+        to set their own password without the old one. Routes should expose this
+        only after a separate trust check, e.g. macOS desktop local-bypass.
+        """
+        username = username.strip().lower()
+        requesting_user = (requesting_user or "").strip().lower()
+        if username not in self.users:
+            return False
+        is_admin = self.users.get(requesting_user, {}).get("is_admin")
+        if not is_admin and not (allow_self and requesting_user == username):
+            return False
+        self._config["users"][username]["password_hash"] = _hash_password(new_password)
+        self._save()
         return True
 
     def is_admin(self, username: str) -> bool:

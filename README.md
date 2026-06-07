@@ -17,6 +17,8 @@ kéo-thả để cài nhanh trên macOS.
 
 **Tải nhanh:** [Odysseus-macOS-2026.06.06.dmg](https://github.com/rowiz-le/Odysseus-Macos/releases/download/v2026.06.06/Odysseus-macOS-2026.06.06.dmg)
 
+**Hướng dẫn sử dụng:** [docs/HUONG_DAN_SU_DUNG_VI.md](docs/HUONG_DAN_SU_DUNG_VI.md)
+
 > Lưu ý: bản `.dmg` hiện tại cần Python 3.11+ trên máy Mac ở lần chạy đầu để
 > bootstrap môi trường riêng trong `~/Library/Application Support/Odysseus`.
 
