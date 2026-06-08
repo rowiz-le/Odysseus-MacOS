@@ -6,7 +6,7 @@ import uiModule, { styledPrompt } from './ui.js';
 import markdownModule from './markdown.js';
 import chatRenderer from './chatRenderer.js';
 import { providerLogo } from './providers.js';
-import { initModelPicker, updateModelPicker } from './modelPicker.js';
+import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260608fix3';
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
 
@@ -2205,7 +2205,9 @@ if (document.readyState === 'loading') {
 // Shared global listener to close all session dropdowns on click-away or Escape
 function _initDropdownDismiss() {
   document.addEventListener('click', (e) => {
+    // Don't close if clicking within any dropdown (including model picker)
     if (e.target.closest('.session-dropdown-menu')) return;
+    if (e.target.closest('#model-picker-menu')) return;  // FIX: Don't close model picker
     document.querySelectorAll('.session-dropdown-menu').forEach(d => d.style.display = 'none');
   });
   // Watch the sidebar — when it's hidden (any path: hamburger, swipe, mobile

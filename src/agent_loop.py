@@ -66,6 +66,7 @@ The block executes automatically and you see the output."""
 
 _AGENT_RULES = """\
 ## Rules
+- ACT, DON'T NARRATE. When the user gives a directive — including a short or vague follow-up like "do it", "go ahead", "continue", "làm đi", "tiếp tục" — take the next concrete step (read the relevant file, run the command, make the edit) instead of replying with "what would you like me to do?". The conversation above is your context: infer the most useful action and perform it. Only ask for clarification when you genuinely cannot determine any reasonable next step. The user can correct you.
 - Only use tools when needed. Don't search for things you already know.
 - These exact tags execute automatically. For showing code examples, use ```shell, ```sh, ```py, etc. instead.
 - Multiple tool blocks per response OK. 60s timeout per tool, 10K char output limit.
@@ -112,7 +113,7 @@ _API_AGENT_RULES = """\
 ## Rules
 - Prefer native tool/function calling when tools are needed.
 - Only call tools when they materially help answer the request.
-- You MUST use tools to take action — do not describe what you would do. Act, don't narrate.
+- You MUST use tools to take action — do not describe what you would do. Act, don't narrate. Short or vague follow-ups ("do it", "go ahead", "continue", "làm đi", "tiếp tục") mean: take the next concrete step using the conversation above as context, not "what would you like me to do?". Only ask for clarification when no reasonable next step exists.
 - Keep answers concise unless the user asks for depth.
 - For long code or content, use document tools instead of pasting large blocks into chat.
 - Editing an existing document: ALWAYS use `edit_document` with find/replace. Only use `update_document` for genuine full rewrites (>50% changed) — do NOT echo the entire file back for small edits.
@@ -396,17 +397,128 @@ def _section_text(name: str, default: str) -> str:
     return val if isinstance(val, str) and val.strip() else default
 
 
-def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool = False) -> str:
-    """Build the system prompt with only the specified tools included."""
+def _split_rule_units(text: str) -> List[str]:
+    """Split a rules block into units: each ``##`` header or ``-`` bullet,
+    plus any continuation lines (sub-bullets, blanks, examples) that follow it.
+    Joining the units with ``\\n`` reproduces the input exactly."""
+    out: List[str] = []
+    cur: List[str] = []
+    for ln in text.split("\n"):
+        if ln.startswith("## ") or ln.startswith("- "):
+            if cur:
+                out.append("\n".join(cur))
+                cur = []
+            cur.append(ln)
+        else:
+            cur.append(ln)
+    if cur:
+        out.append("\n".join(cur))
+    return out
+
+
+# Tool groups used to gate domain-specific rule lines. A rule unit mapped to a
+# group is only included when at least one tool from that group was selected for
+# the request. ``None`` = always include (core behavioural rules).
+_RG_EMAIL = frozenset({
+    "list_emails", "read_email", "send_email", "reply_to_email", "bulk_email",
+    "archive_email", "delete_email", "mark_email_read", "list_email_accounts", "email",
+})
+_RG_CALENDAR = frozenset({"manage_calendar"})
+_RG_NOTES = frozenset({"manage_notes"})
+_RG_TASKS = frozenset({"manage_tasks"})
+_RG_MEMORY = frozenset({"manage_memory", "manage_contact", "resolve_contact"})
+_RG_RESEARCH = frozenset({"trigger_research", "manage_research"})
+_RG_UICTRL = frozenset({"ui_control"})
+_RG_COOKBOOK = frozenset({
+    "serve_model", "serve_preset", "list_serve_presets", "search_hf_models",
+    "download_model", "cancel_download", "list_cookbook_servers", "list_served_models",
+    "stop_served_model", "tail_serve_output", "adopt_served_model",
+    "list_downloads", "list_cached_models",
+})
+_RG_SESSIONS = frozenset({
+    "list_sessions", "manage_session", "create_session", "send_to_session", "search_chats",
+})
+_RG_DOCS = frozenset({
+    "create_document", "edit_document", "update_document", "suggest_document", "manage_documents",
+})
+# Entity types that get clickable #anchor links — the "UI conventions" rules
+# only matter when one of these tools is in play.
+_RG_LINKABLE = (
+    _RG_SESSIONS | _RG_DOCS | _RG_NOTES | _RG_EMAIL | _RG_CALENDAR | _RG_TASKS
+    | _RG_RESEARCH | {"generate_image", "manage_skills", "manage_memory"}
+)
+
+# Per-unit gate for _AGENT_RULES (fenced-block path). Index-aligned with
+# _split_rule_units(_AGENT_RULES). The import-time self-test below asserts the
+# length matches and that gating with every tool reproduces the original.
+_FENCED_RULE_GATES = [
+    None, None, None, None, None,        # 0-4: header + core behaviour
+    _RG_DOCS, _RG_DOCS, _RG_DOCS,        # 5-7: document create/edit/bias
+    None, None, None,                    # 8-10: success/fail/done
+    _RG_CALENDAR,                        # 11
+    _RG_EMAIL, _RG_EMAIL, _RG_EMAIL, _RG_EMAIL, _RG_EMAIL,  # 12-16
+    _RG_MEMORY,                          # 17
+    _RG_NOTES,                           # 18
+    _RG_TASKS,                           # 19
+    _RG_LINKABLE, _RG_LINKABLE, _RG_LINKABLE, _RG_LINKABLE, _RG_LINKABLE,  # 20-24 UI conventions
+]
+
+# Per-unit gate for _API_AGENT_RULES (native function-calling path).
+_API_RULE_GATES = [
+    None, None, None, None, None,        # 0-4: header + core behaviour
+    _RG_DOCS, _RG_DOCS,                  # 5-6: long code / edit
+    _RG_DOCS | _RG_EMAIL,                # 7: email-draft editor
+    _RG_DOCS, _RG_DOCS,                  # 8-9: suggest / bias
+    None, None, None,                    # 10-12: success/fail/done
+    _RG_CALENDAR,                        # 13
+    _RG_NOTES,                           # 14
+    _RG_UICTRL,                          # 15: disable/enable tool
+    _RG_RESEARCH,                        # 16
+    _RG_UICTRL,                          # 17: open panel
+    _RG_EMAIL | _RG_UICTRL,              # 18: open reply
+    _RG_EMAIL, _RG_EMAIL, _RG_EMAIL, _RG_EMAIL, _RG_EMAIL,  # 19-23
+    _RG_MEMORY,                          # 24
+    _RG_SESSIONS, _RG_SESSIONS,          # 25-26
+    _RG_COOKBOOK,                        # 27
+    _RG_LINKABLE, _RG_LINKABLE, _RG_LINKABLE, _RG_LINKABLE, _RG_LINKABLE,  # 28-32 UI conventions
+]
+
+
+def _gate_rules(rules_text: str, gates: List, included: set) -> str:
+    """Drop domain-specific rule units whose tool group isn't in ``included``.
+
+    Core units (gate ``None``) are always kept. If the gate map length doesn't
+    match the rule units (someone edited a rule and shifted indices), fall back
+    to the full text so behaviour is never silently truncated."""
+    units = _split_rule_units(rules_text)
+    if len(units) != len(gates):
+        logger.warning(
+            "Rule gate map out of sync (%d units vs %d gates) — using full rules",
+            len(units), len(gates),
+        )
+        return rules_text
+    kept = [u for u, g in zip(units, gates) if g is None or (g & included)]
+    return "\n".join(kept)
+
+
+def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool = False,
+                     gate_rules: bool = False) -> str:
+    """Build the system prompt with only the specified tools included.
+
+    When ``gate_rules`` is True (RAG path with a curated tool set), domain-
+    specific rule lines for tools that weren't selected are dropped to keep the
+    prompt small for context-limited local models. With every tool present the
+    output is byte-identical to the un-gated prompt."""
     disabled = disabled_tools or set()
     included = tool_names - disabled
 
     if compact:
         tool_list = ", ".join(sorted(included)) if included else "none"
+        api_rules = _gate_rules(_API_AGENT_RULES, _API_RULE_GATES, included) if gate_rules else _API_AGENT_RULES
         parts = [
             "You are an AI assistant with tool access.",
             f"Available tools: {tool_list}.",
-            _API_AGENT_RULES,
+            api_rules,
         ]
         return "\n\n".join(parts)
 
@@ -443,12 +555,43 @@ def _assemble_prompt(tool_names: set, disabled_tools: set = None, compact: bool 
             hint += f", ... ({len(not_shown) - 5} more)"
         parts.append(f"(Other tools available when needed: {hint})")
 
-    parts.append(_AGENT_RULES)
+    fenced_rules = _gate_rules(_AGENT_RULES, _FENCED_RULE_GATES, included) if gate_rules else _AGENT_RULES
+    parts.append(fenced_rules)
     return "\n\n".join(parts)
 
 
 # Legacy: full prompt with all tools (fallback when RAG unavailable)
 AGENT_SYSTEM_PROMPT = _assemble_prompt(set(TOOL_SECTIONS.keys()))
+
+
+def _verify_rule_gates() -> None:
+    """Fail fast at import if a gate map drifts out of sync with its rules text.
+
+    Gating with the full tool universe must reproduce the original rules
+    verbatim; otherwise a rule edit silently dropped (or duplicated) a line."""
+    _all = (
+        _RG_EMAIL | _RG_CALENDAR | _RG_NOTES | _RG_TASKS | _RG_MEMORY | _RG_RESEARCH
+        | _RG_UICTRL | _RG_COOKBOOK | _RG_SESSIONS | _RG_DOCS | _RG_LINKABLE
+    )
+    for text, gates, label in (
+        (_AGENT_RULES, _FENCED_RULE_GATES, "_AGENT_RULES"),
+        (_API_AGENT_RULES, _API_RULE_GATES, "_API_AGENT_RULES"),
+    ):
+        units = _split_rule_units(text)
+        if len(units) != len(gates):
+            logger.warning(
+                "Rule gate map for %s out of sync (%d units vs %d gates); "
+                "gating disabled for it until fixed.", label, len(units), len(gates),
+            )
+            continue
+        if _gate_rules(text, gates, _all) != text:
+            logger.warning(
+                "Rule gate map for %s does not reproduce original with all tools; "
+                "review _split_rule_units alignment.", label,
+            )
+
+
+_verify_rule_gates()
 
 
 _cached_base_prompt = None
@@ -1020,7 +1163,11 @@ def _build_base_prompt(
         tool_names = set(ALWAYS_AVAILABLE) | set(relevant_tools)
         if needs_admin:
             tool_names |= _ADMIN_TOOLS
-        agent_prompt = _assemble_prompt(tool_names, disabled, compact=compact)
+        # Curated tool set → also drop domain rule lines (email/calendar/
+        # cookbook/etc.) for tools that weren't selected. Keeps the prompt
+        # small so context-limited local models see the behavioural rules
+        # instead of drowning in irrelevant tool-specific guidance.
+        agent_prompt = _assemble_prompt(tool_names, disabled, compact=compact, gate_rules=True)
     else:
         # Fallback: full prompt (RAG unavailable)
         agent_prompt = AGENT_SYSTEM_PROMPT

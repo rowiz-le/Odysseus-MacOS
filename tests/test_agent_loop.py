@@ -16,6 +16,7 @@ for mod in [
         sys.modules[mod] = MagicMock()
 
 from src.agent_loop import _detect_admin_intent, _compute_final_metrics
+import src.agent_loop as agent_loop
 
 
 # ---------------------------------------------------------------------------
@@ -239,3 +240,78 @@ class TestComputeFinalMetrics:
         m = _compute_final_metrics(**self._base_args(tool_events=[], round_texts=[]))
         assert "tool_events" not in m
         assert "round_texts" not in m
+
+
+# ---------------------------------------------------------------------------
+# Rule gating (prompt-bloat reduction for context-limited local models)
+# ---------------------------------------------------------------------------
+
+class TestRuleGating:
+    """Domain-specific rule lines are dropped when their tools aren't selected,
+    but core behavioural rules and full reconstruction are preserved."""
+
+    def _all_tools(self):
+        return (
+            agent_loop._RG_EMAIL | agent_loop._RG_CALENDAR | agent_loop._RG_NOTES
+            | agent_loop._RG_TASKS | agent_loop._RG_MEMORY | agent_loop._RG_RESEARCH
+            | agent_loop._RG_UICTRL | agent_loop._RG_COOKBOOK | agent_loop._RG_SESSIONS
+            | agent_loop._RG_DOCS | agent_loop._RG_LINKABLE
+        )
+
+    def test_fenced_identity_with_all_tools(self):
+        out = agent_loop._gate_rules(
+            agent_loop._AGENT_RULES, agent_loop._FENCED_RULE_GATES, self._all_tools()
+        )
+        assert out == agent_loop._AGENT_RULES
+
+    def test_api_identity_with_all_tools(self):
+        out = agent_loop._gate_rules(
+            agent_loop._API_AGENT_RULES, agent_loop._API_RULE_GATES, self._all_tools()
+        )
+        assert out == agent_loop._API_AGENT_RULES
+
+    def test_gate_map_lengths_match_units(self):
+        assert len(agent_loop._split_rule_units(agent_loop._AGENT_RULES)) == len(
+            agent_loop._FENCED_RULE_GATES
+        )
+        assert len(agent_loop._split_rule_units(agent_loop._API_AGENT_RULES)) == len(
+            agent_loop._API_RULE_GATES
+        )
+
+    def test_coding_request_drops_email_and_cookbook(self):
+        coding = {"bash", "python", "read_file", "write_file", "edit_file"}
+        fenced = agent_loop._gate_rules(
+            agent_loop._AGENT_RULES, agent_loop._FENCED_RULE_GATES, coding
+        )
+        api = agent_loop._gate_rules(
+            agent_loop._API_AGENT_RULES, agent_loop._API_RULE_GATES, coding
+        )
+        # Domain noise removed
+        assert "Email UIDs" not in fenced
+        assert "Cookbook" not in api
+        # Substantially smaller
+        assert len(fenced) < len(agent_loop._AGENT_RULES) * 0.6
+        assert len(api) < len(agent_loop._API_AGENT_RULES) * 0.6
+
+    def test_core_act_directive_always_kept(self):
+        for tools in ({"bash"}, set(), self._all_tools()):
+            fenced = agent_loop._gate_rules(
+                agent_loop._AGENT_RULES, agent_loop._FENCED_RULE_GATES, tools
+            )
+            api = agent_loop._gate_rules(
+                agent_loop._API_AGENT_RULES, agent_loop._API_RULE_GATES, tools
+            )
+            assert "ACT, DON'T NARRATE" in fenced
+            assert "Act, don't narrate" in api
+
+    def test_email_tools_keep_email_rules(self):
+        out = agent_loop._gate_rules(
+            agent_loop._AGENT_RULES, agent_loop._FENCED_RULE_GATES,
+            {"list_emails", "read_email"},
+        )
+        assert "Email UIDs" in out
+
+    def test_length_mismatch_falls_back_to_full(self):
+        # Wrong-length gate map must not silently truncate rules.
+        out = agent_loop._gate_rules(agent_loop._AGENT_RULES, [None], {"bash"})
+        assert out == agent_loop._AGENT_RULES

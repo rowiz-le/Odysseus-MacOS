@@ -189,6 +189,26 @@ class TestClassifyEndpoint:
     def test_malformed_url(self):
         assert _classify_endpoint("not-a-url") == "api"
 
+    def test_localhost_with_proxy_kind_stays_local(self):
+        # Regression: LM Studio / vLLM on localhost set a dummy api_key + /v1
+        # path, which the legacy heuristic labelled "proxy". A genuinely local
+        # address must stay local so it gets reachability-probed (otherwise the
+        # picker can't dim it when down, and never flaps it correctly).
+        assert _classify_endpoint("http://localhost:1234/v1", "proxy") == "local"
+
+    def test_localhost_with_api_kind_stays_local(self):
+        assert _classify_endpoint("http://127.0.0.1:8080/v1", "api") == "local"
+
+    def test_private_with_proxy_kind_stays_local(self):
+        assert _classify_endpoint("http://192.168.1.100:5000/v1", "proxy") == "local"
+
+    def test_public_with_proxy_kind_is_api(self):
+        assert _classify_endpoint("https://gatecheap.io.vn/v1", "proxy") == "api"
+
+    def test_explicit_local_kind_on_public_host(self):
+        # User explicitly marked it local — honour that.
+        assert _classify_endpoint("https://example.com/v1", "local") == "local"
+
 
 # ── setup probing ──
 

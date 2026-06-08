@@ -609,19 +609,22 @@ def _classify_endpoint(base_url: str, endpoint_kind: str = "auto") -> str:
     """Return 'local' if the endpoint URL points to a private/local address, else 'api'.
     Includes the Tailscale CGNAT range (100.64.0.0/10) so tailnet-hosted
     servers (e.g. Cookbook serve endpoints) get reachability-probed too."""
+    # A genuinely local/private address is ALWAYS local, even if the endpoint
+    # has an api_key and a /v1 path (LM Studio, vLLM, etc. on localhost set a
+    # dummy key + /v1). Without this check the legacy "proxy" heuristic in
+    # _effective_endpoint_kind mislabels a local server as a cloud API, so it
+    # never gets reachability-probed and is wrongly assumed always-up.
+    try:
+        host = urlparse(base_url).hostname or ""
+        if host in _LOCAL_HOSTS or host.startswith(_PRIVATE_PREFIXES) or _TAILSCALE_RE.match(host):
+            return "local"
+    except Exception:
+        pass
     kind = _normalize_endpoint_kind(endpoint_kind)
     if kind == "local":
         return "local"
     if kind in ("api", "proxy"):
         return "api"
-    try:
-        host = urlparse(base_url).hostname or ""
-        if host in _LOCAL_HOSTS or host.startswith(_PRIVATE_PREFIXES):
-            return "local"
-        if _TAILSCALE_RE.match(host):
-            return "local"
-    except Exception:
-        pass
     return "api"
 
 
@@ -1197,7 +1200,12 @@ def setup_model_routes(model_discovery):
             t0 = _time.time()
             try:
                 import asyncio as _asyncio
-                ping = await _asyncio.to_thread(_ping_endpoint, data["base"], data.get("api_key"), 1.5)
+                # 3.5s (not 1.5s): a local server busy loading or serving a
+                # large model can take >1.5s just to answer a health ping.
+                # Too-tight a timeout flips the endpoint to "offline", dimming
+                # its models in the picker, then the next probe flips it back —
+                # that flap is the model-picker flicker users see.
+                ping = await _asyncio.to_thread(_ping_endpoint, data["base"], data.get("api_key"), 3.5)
                 lat = round((_time.time() - t0) * 1000)
                 return {
                     "alive": bool(ping.get("reachable")),

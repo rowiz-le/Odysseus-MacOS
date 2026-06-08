@@ -95,7 +95,14 @@ function _initModelPickerDropdown() {
   // server side too (8s TTL). Picker opens trigger a refresh.
   let _localProbe = {};            // {endpoint_id: {alive, latency_ms, error}}
   let _localProbeFetchedAt = 0;
-  const _LOCAL_PROBE_TTL_MS = 5000;
+  const _LOCAL_PROBE_TTL_MS = 30000;  // Increased from 5s to 30s to reduce refresh frequency
+  // Hysteresis: a single slow probe (e.g. a local server busy loading/serving a
+  // large model) used to flip the endpoint to "offline", dimming its models;
+  // the next probe flipped it back. That flap is the model-picker flicker.
+  // Require two consecutive failures before showing offline; clear instantly
+  // on any success.
+  const _probeFailCounts = {};     // {endpoint_id: consecutiveFailures}
+  const _PROBE_FAIL_THRESHOLD = 2;
 
   function _cachedModelItems() {
     return (window.modelsModule && window.modelsModule.getCachedItems)
@@ -141,7 +148,24 @@ function _initModelPickerDropdown() {
     _localProbeFetchedAt = now;
     try {
       const r = await fetch('/api/model-endpoints/probe-local', { credentials: 'same-origin' });
-      if (r.ok) _localProbe = (await r.json()) || {};
+      if (r.ok) {
+        const raw = (await r.json()) || {};
+        // Apply hysteresis so a single slow/timed-out probe doesn't flap the
+        // endpoint to "offline" (which dims its models and looks like flicker).
+        const smoothed = {};
+        for (const [epId, res] of Object.entries(raw)) {
+          if (res && res.alive === false) {
+            const n = (_probeFailCounts[epId] || 0) + 1;
+            _probeFailCounts[epId] = n;
+            // Keep reporting alive until we've seen enough consecutive misses.
+            smoothed[epId] = n >= _PROBE_FAIL_THRESHOLD ? res : { ...res, alive: true, _pending: true };
+          } else {
+            _probeFailCounts[epId] = 0;
+            smoothed[epId] = res;
+          }
+        }
+        _localProbe = smoothed;
+      }
     } catch (_) { /* leave stale data; picker still works */ }
   }
 
@@ -222,15 +246,20 @@ function _initModelPickerDropdown() {
         badge.className = 'model-switch-stale-badge';
         badge.textContent = 'offline';
         badge.style.cssText = 'font-size:10px;opacity:0.7;padding:1px 6px;border:1px solid var(--border);border-radius:8px;margin-left:6px;';
+        badge.addEventListener('click', (e) => e.stopPropagation());
         row.appendChild(badge);
       }
       const epSpan = document.createElement('span');
       epSpan.className = 'model-switch-ep';
       // Don't show endpoint name if it matches the model name (local self-hosted)
-      const _epDisplay = m.epName && !m.display.toLowerCase().includes(m.epName.toLowerCase().split('/').pop()) ? m.epName : '';
-      epSpan.textContent = _epDisplay;
+      const _epDisplayText = m.epName && !m.display.toLowerCase().includes(m.epName.toLowerCase().split('/').pop()) ? m.epName : '';
+      epSpan.textContent = _epDisplayText;
       row.appendChild(epSpan);
-      row.addEventListener('click', () => _pick(m));
+      // FIX: Add stopPropagation to prevent event bubbling that closes picker immediately
+      row.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _pick(m);
+      });
       listEl.appendChild(row);
     }
 
@@ -258,20 +287,18 @@ function _initModelPickerDropdown() {
     // waiting for the async session-create/PATCH that follows.
     try { document.dispatchEvent(new CustomEvent('odysseus:model-picked', { detail: m })); } catch {}
 
-    // Blur search input before closing to dismiss keyboard on mobile
-    if (document.activeElement) document.activeElement.blur();
-    _close();
-    // Refocus main textarea — skip on mobile to avoid keyboard bounce
-    if (window.innerWidth >= 768) {
-      const _ta = document.getElementById('message');
-      if (_ta) setTimeout(() => _ta.focus(), 50);
-    }
+    // FIX: Don't close picker immediately - wait until model selection completes
+    // This prevents the "closing too fast" issue where modal closes before user sees result
+
     if (!currentSessionId && _pendingChat) {
       // Already have a deferred session — just update the model
       _deps.setPendingChat({ url: m.url, modelId: m.mid, endpointId: m.endpointId });
       // Header stays as session name — model switch only updates picker
       updateModelPicker();
       uiModule.showToast(`Using ${m.display}`);
+      // Close picker after successful selection
+      _close();
+      if (document.activeElement) document.activeElement.blur();
       return;
     } else if (!currentSessionId) {
       // No session yet — create one with this model
@@ -310,6 +337,9 @@ function _initModelPickerDropdown() {
     // Update picker visibility — model is now set
     updateModelPicker();
     uiModule.showToast(`Using ${m.display}`);
+    // Close picker after successful selection
+    _close();
+    if (document.activeElement) document.activeElement.blur();
   }
 
   btn.addEventListener('click', (e) => {
@@ -328,8 +358,12 @@ function _initModelPickerDropdown() {
       // Kick off a local-endpoint probe — when it returns, re-render
       // the list so stale local servers get dimmed. Cloud entries
       // aren't probed; they stay visible.
+      // FIX: Only re-render if picker is still open after probe completes
       Promise.allSettled([_ensurePickerItems(), _refreshLocalProbe()]).then(() => {
-        if (!menu.classList.contains('hidden')) _populate(search.value || '');
+        // Only re-render if picker hasn't been closed in the meantime
+        if (!menu.classList.contains('hidden') && !menu.classList.contains('closing')) {
+          _populate(search.value || '');
+        }
       });
       if (window.innerWidth >= 768) search.focus();
       // Hide scroll button so it doesn't overlap
