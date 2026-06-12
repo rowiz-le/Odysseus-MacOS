@@ -15,7 +15,9 @@ import { providerLogo } from './providers.js';
 let API_BASE = '';
 let _cachedItems = []; // cached /api/models items for model-switch dropdown
 let _lastFetchTime = 0;
+let _autoSyncTimer = null;
 const _FETCH_CACHE_TTL = 30000; // 30s client-side cache for /api/models
+const _AUTO_SYNC_INTERVAL = 30000;
 const COLLAPSE_KEY = 'odysseus-models-collapsed';
 const FAVORITES_KEY = 'odysseus-model-favorites';
 const USAGE_KEY = 'odysseus-model-usage';
@@ -23,6 +25,24 @@ const SORT_KEY = 'odysseus-model-sort';
 
 export function init(apiBase) {
   API_BASE = apiBase;
+  if (!_autoSyncTimer) {
+    const sync = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/models?refresh=true`, {
+          credentials: 'same-origin',
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        _cachedItems = data.items || [];
+        _lastFetchTime = Date.now();
+        document.dispatchEvent(new CustomEvent('odysseus:models-refreshed'));
+      } catch (_) {
+        // LM Studio may be closed; retain the last known catalog.
+      }
+    };
+    setTimeout(sync, 1500);
+    _autoSyncTimer = setInterval(sync, _AUTO_SYNC_INTERVAL);
+  }
 }
 
 // ── Collapse state persistence ──
@@ -175,10 +195,13 @@ export async function refreshModels(force = false) {
     box.appendChild(_loadingSpinner.createElement());
     _loadingSpinner.start();
     try {
-      const res = await fetch(`${API_BASE}/api/models`);
+      const res = await fetch(`${API_BASE}/api/models${force ? '?refresh=true' : ''}`, {
+        credentials: 'same-origin',
+      });
       const data = await res.json();
       _lastFetchTime = Date.now();
       _cachedItems = data.items || [];
+      document.dispatchEvent(new CustomEvent('odysseus:models-refreshed'));
     } catch (e) {
       console.error(e);
       box.textContent = '(scan failed)';

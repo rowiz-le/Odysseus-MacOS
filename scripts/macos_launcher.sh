@@ -3,6 +3,7 @@ set -euo pipefail
 
 APP_NAME="Odysseus"
 BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+APP_INFO_PLIST="$BUNDLE_DIR/Info.plist"
 PAYLOAD_DIR="$BUNDLE_DIR/Resources/app"
 SUPPORT_ROOT="$HOME/Library/Application Support/$APP_NAME"
 RUN_DIR="$SUPPORT_ROOT/app"
@@ -158,6 +159,10 @@ export LOCALHOST_BYPASS="${LOCALHOST_BYPASS:-true}"
 export ODYSSEUS_DESKTOP="${ODYSSEUS_DESKTOP:-1}"
 export ODYSSEUS_DESKTOP_PORT="${ODYSSEUS_DESKTOP_PORT:-7001}"
 export ODYSSEUS_INPROCESS_POLLERS="${ODYSSEUS_INPROCESS_POLLERS:-0}"
+if [[ -z "${ODYSSEUS_APP_VERSION:-}" && -f "$APP_INFO_PLIST" ]]; then
+  ODYSSEUS_APP_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP_INFO_PLIST" 2>/dev/null || true)"
+fi
+export ODYSSEUS_APP_VERSION="${ODYSSEUS_APP_VERSION:-1.0}"
 export LLM_HOST="${LLM_HOST:-localhost}"
 export LLM_HOSTS="${LLM_HOSTS:-localhost:1234}"
 export CHROMADB_HOST="${CHROMADB_HOST:-127.0.0.1}"

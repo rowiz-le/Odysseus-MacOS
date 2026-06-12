@@ -9,6 +9,7 @@ import threading
 from fastapi import HTTPException
 from typing import Optional, Dict, List
 from src.model_context import get_context_length, DEFAULT_CONTEXT
+from src.reasoning import apply_reasoning_guidance, api_reasoning_effort
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,8 @@ class LLMConfig:
 
 # Cache for LLM responses
 def _get_cache_key(url: str, model: str, messages: List[Dict], 
-                   temperature: float, max_tokens: int) -> str:
+                   temperature: float, max_tokens: int,
+                   reasoning_effort: Optional[str] = None) -> str:
     """Generate cache key for LLM requests."""
     hashable_messages = []
     for msg in messages:
@@ -37,7 +39,8 @@ def _get_cache_key(url: str, model: str, messages: List[Dict],
         'model': model, 
         'messages': hashable_messages,
         'temp': temperature,
-        'max_tokens': max_tokens
+        'max_tokens': max_tokens,
+        'reasoning_effort': reasoning_effort,
     }, sort_keys=True)
     return hashlib.sha256(content.encode()).hexdigest()
 
@@ -876,7 +879,8 @@ def normalize_model_id(endpoint_url: str, requested: str, timeout: int = LLMConf
 
 def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
              max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None, 
-             timeout: int = LLMConfig.DEFAULT_TIMEOUT, prompt_type: Optional[str] = None) -> str:
+             timeout: int = LLMConfig.DEFAULT_TIMEOUT, prompt_type: Optional[str] = None,
+             reasoning_effort: Optional[str] = None) -> str:
     """Synchronous LLM call with optional prompt type enhancement."""
     h = _provider_headers(_detect_provider(url))
     # Tolerate headers that arrive as a JSON string (some sessions stored them
@@ -890,7 +894,10 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
     if isinstance(headers, dict):
         h.update(headers)
 
-    messages_copy = _sanitize_llm_messages(messages)
+    messages_copy = apply_reasoning_guidance(
+        _sanitize_llm_messages(messages),
+        reasoning_effort,
+    )
 
     # Consolidate multiple system messages into one at the start.
     sys_parts = []
@@ -906,7 +913,9 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
         messages_copy = non_sys
 
     provider = _detect_provider(url)
-    cache_key = _get_cache_key(url, model, messages_copy, temperature, max_tokens)
+    cache_key = _get_cache_key(
+        url, model, messages_copy, temperature, max_tokens, reasoning_effort
+    )
     cached_response = _get_cached_response(cache_key)
     if cached_response:
         logger.debug(f"Returning cached response for key: {cache_key}")
@@ -937,6 +946,9 @@ def llm_call(url: str, model: str, messages: List[Dict], temperature: float = LL
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
             payload[tok_key] = max_tokens
+        api_effort = api_reasoning_effort(model, reasoning_effort)
+        if api_effort:
+            payload["reasoning_effort"] = api_effort
     try:
         note_model_activity(target_url, model)
         r = httpx.post(target_url, headers=h, json=payload, timeout=timeout)
@@ -1033,11 +1045,15 @@ async def llm_call_async(
     headers: Optional[Dict] = None,
     timeout: int = LLMConfig.STREAM_TIMEOUT,
     max_retries: int = LLMConfig.MAX_RETRIES,
-    prompt_type: Optional[str] = None
+    prompt_type: Optional[str] = None,
+    reasoning_effort: Optional[str] = None,
 ) -> str:
     """Asynchronous LLM call using httpx with connection pooling, timeout, retry logic, and performance logging."""
     provider = _detect_provider(url)
-    messages_copy = _sanitize_llm_messages(messages)
+    messages_copy = apply_reasoning_guidance(
+        _sanitize_llm_messages(messages),
+        reasoning_effort,
+    )
 
     # Consolidate multiple system messages into one at the start.
     sys_parts = []
@@ -1052,7 +1068,9 @@ async def llm_call_async(
     else:
         messages_copy = non_sys
 
-    cache_key = _get_cache_key(url, model, messages_copy, temperature, max_tokens)
+    cache_key = _get_cache_key(
+        url, model, messages_copy, temperature, max_tokens, reasoning_effort
+    )
     cached_response = _get_cached_response(cache_key)
     if cached_response:
         logger.debug(f"Returning cached response for key: {cache_key}")
@@ -1087,6 +1105,9 @@ async def llm_call_async(
         if max_tokens and max_tokens > 0:
             tok_key = "max_completion_tokens" if _uses_max_completion_tokens(model) else "max_tokens"
             payload[tok_key] = max_tokens
+        api_effort = api_reasoning_effort(model, reasoning_effort)
+        if api_effort:
+            payload["reasoning_effort"] = api_effort
 
     if _is_host_dead(target_url):
         raise HTTPException(503, f"Upstream {_host_key(target_url)} marked unreachable (cooldown active)")
@@ -1144,7 +1165,8 @@ async def llm_call_async(
 async def stream_llm(url: str, model: str, messages: List[Dict], temperature: float = LLMConfig.DEFAULT_TEMPERATURE,
                      max_tokens: int = LLMConfig.DEFAULT_MAX_TOKENS, headers: Optional[Dict] = None,
                      timeout: int = LLMConfig.STREAM_TIMEOUT, prompt_type: Optional[str] = None,
-                     tools: Optional[List[Dict]] = None):
+                     tools: Optional[List[Dict]] = None,
+                     reasoning_effort: Optional[str] = None):
     """Stream LLM responses with improved error handling.
 
     Yields SSE chunks:
@@ -1154,7 +1176,10 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
       - data: [DONE]                       — end of stream
     """
     provider = _detect_provider(url)
-    messages_copy = _sanitize_llm_messages(messages)
+    messages_copy = apply_reasoning_guidance(
+        _sanitize_llm_messages(messages),
+        reasoning_effort,
+    )
 
     # Consolidate multiple system messages into one at the start.
     # Some models (e.g. Qwen3.5) reject system messages that aren't first.
@@ -1200,6 +1225,9 @@ async def stream_llm(url: str, model: str, messages: List[Dict], temperature: fl
             payload[tok_key] = max_tokens
         if tools:
             payload["tools"] = tools
+        api_effort = api_reasoning_effort(model, reasoning_effort)
+        if api_effort:
+            payload["reasoning_effort"] = api_effort
         h = _provider_headers(provider, headers)
         if provider == "copilot":
             from src.copilot import apply_request_headers

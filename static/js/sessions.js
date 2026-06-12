@@ -6,7 +6,7 @@ import uiModule, { styledPrompt } from './ui.js';
 import markdownModule from './markdown.js';
 import chatRenderer from './chatRenderer.js';
 import { providerLogo } from './providers.js';
-import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260608fix3';
+import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260608fix4';
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
 
@@ -1197,13 +1197,15 @@ function _updateBulkCount() {
 
 function _initBulkSelect() {
   const selectBtn = document.getElementById('session-select-btn');
-  if (selectBtn) {
-    selectBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      if (_selectMode) _exitSelectMode();
-      else _enterSelectMode();
-    });
-  }
+  if (!selectBtn) return;
+  if (selectBtn.dataset.bulkSelectWired) return;
+  selectBtn.dataset.bulkSelectWired = 'true';
+
+  selectBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (_selectMode) _exitSelectMode();
+    else _enterSelectMode();
+  });
   const cancelBtn = document.getElementById('session-bulk-cancel');
   if (cancelBtn) cancelBtn.addEventListener('click', () => _exitSelectMode());
 

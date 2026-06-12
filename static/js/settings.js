@@ -1867,6 +1867,8 @@ async function initShortcuts() {
    ═══════════════════════════════════════════ */
 function initAccount() {
   let accountStatus = { configured: true, authenticated: false, local_bypass: false };
+  let biometricToken = '';
+  let biometricExpiresAt = 0;
 
   const setMsg = (node, text, color = '') => {
     if (!node) return;
@@ -1882,6 +1884,30 @@ function initAccount() {
       displayName = `${local.charAt(0)}•••@••••${ext}`;
     }
     return displayName;
+  };
+
+  const clearBiometricVerification = () => {
+    biometricToken = '';
+    biometricExpiresAt = 0;
+    const status = el('settings-touch-id-status');
+    if (status) {
+      status.textContent = '';
+      status.style.display = 'none';
+    }
+  };
+
+  const refreshTouchIdAvailability = async () => {
+    const button = el('settings-touch-id-btn');
+    if (!button) return;
+    button.style.display = 'none';
+    const api = window.pywebview?.api;
+    if (!api?.touch_id_status || !accountStatus.authenticated) return;
+    try {
+      const status = await api.touch_id_status();
+      button.style.display = status?.available ? 'inline-flex' : 'none';
+    } catch (_) {
+      button.style.display = 'none';
+    }
   };
 
   const refreshUserChrome = (username, isAdmin) => {
@@ -1912,9 +1938,6 @@ function initAccount() {
     const pwCard = el('settings-pw-card');
     const tfaCard = el('settings-2fa-card');
     const statusEl = el('settings-account-status');
-    const pwTitle = el('settings-pw-title');
-    const currentPw = el('settings-pw-current');
-    const pwSaveBtn = el('settings-pw-save');
 
     refreshUserChrome(accountStatus.username, accountStatus.is_admin);
     if (el('settings-profile-username')) el('settings-profile-username').value = accountStatus.username || '';
@@ -1925,9 +1948,6 @@ function initAccount() {
     if (setupCard) setupCard.style.display = !configured ? '' : 'none';
     if (pwCard) pwCard.style.display = authenticated ? '' : 'none';
     if (tfaCard) tfaCard.style.display = authenticated && !localBypass ? '' : 'none';
-    if (pwTitle) pwTitle.lastChild.textContent = localBypass ? 'Set Password' : 'Change Password';
-    if (pwSaveBtn) pwSaveBtn.textContent = localBypass ? 'Set Password' : 'Update Password';
-    if (currentPw) currentPw.style.display = localBypass ? 'none' : '';
 
     if (!configured) {
       setMsg(statusEl, 'Create your local admin account first.');
@@ -1938,6 +1958,8 @@ function initAccount() {
     } else {
       setMsg(statusEl, '');
     }
+    clearBiometricVerification();
+    refreshTouchIdAvailability();
   };
 
   const loadAccountStatus = async () => {
@@ -1951,6 +1973,7 @@ function initAccount() {
   };
 
   loadAccountStatus();
+  window.addEventListener('pywebviewready', refreshTouchIdAvailability, { once: true });
 
   const loginBtn = el('settings-login-btn');
   if (loginBtn) loginBtn.addEventListener('click', () => { window.location.href = '/login'; });
@@ -1974,6 +1997,7 @@ function initAccount() {
         if (!res.ok) throw new Error(d.detail || 'Failed');
         setMsg(profileMsg, 'Username saved', 'var(--green)');
         accountStatus.username = d.username;
+        clearBiometricVerification();
         refreshUserChrome(d.username, accountStatus.is_admin);
       } catch (e) {
         setMsg(profileMsg, e.message, 'var(--red)');
@@ -2017,29 +2041,74 @@ function initAccount() {
   // Change/set password
   const saveBtn = el('settings-pw-save');
   const msgEl = el('settings-pw-msg');
+  const currentPw = el('settings-pw-current');
+  const touchIdBtn = el('settings-touch-id-btn');
+  if (currentPw) {
+    currentPw.addEventListener('input', () => {
+      if (currentPw.value) clearBiometricVerification();
+    });
+  }
+  if (touchIdBtn) {
+    touchIdBtn.addEventListener('click', async () => {
+      const statusEl = el('settings-touch-id-status');
+      const api = window.pywebview?.api;
+      setMsg(msgEl, '');
+      clearBiometricVerification();
+      if (!api?.authorize_touch_id) {
+        setMsg(msgEl, 'Touch ID is unavailable', 'var(--red)');
+        return;
+      }
+      touchIdBtn.disabled = true;
+      try {
+        const result = await api.authorize_touch_id(accountStatus.username || '');
+        if (!result?.ok || !result.token) {
+          throw new Error(result?.error || 'Touch ID verification failed');
+        }
+        biometricToken = result.token;
+        biometricExpiresAt = Number(result.expires_at || 0) * 1000;
+        if (currentPw) currentPw.value = '';
+        if (statusEl) {
+          statusEl.textContent = 'Verified with Touch ID. Complete the change within 75 seconds.';
+          statusEl.style.display = '';
+        }
+      } catch (e) {
+        setMsg(msgEl, e.message || 'Touch ID verification failed', 'var(--red)');
+      } finally {
+        touchIdBtn.disabled = false;
+      }
+    });
+  }
   if (saveBtn) {
     saveBtn.addEventListener('click', async () => {
-      const localBypass = !!accountStatus.local_bypass;
       const cur = el('settings-pw-current').value;
       const nw = el('settings-pw-new').value;
       const conf = el('settings-pw-confirm').value;
+      if (biometricToken && Date.now() >= biometricExpiresAt) clearBiometricVerification();
       setMsg(msgEl, '');
-      if ((!localBypass && !cur) || !nw) { setMsg(msgEl, 'Fill in all fields', 'var(--red)'); return; }
+      if (!cur && !biometricToken) { setMsg(msgEl, 'Enter your current password or verify with Touch ID', 'var(--red)'); return; }
+      if (!nw || !conf) { setMsg(msgEl, 'Fill in the new password fields', 'var(--red)'); return; }
       if (nw.length < 8) { setMsg(msgEl, 'Min 8 characters', 'var(--red)'); return; }
       if (nw !== conf) { setMsg(msgEl, 'Passwords don\'t match', 'var(--red)'); return; }
       saveBtn.disabled = true;
+      const usedBiometricToken = cur ? '' : biometricToken;
       try {
         const res = await fetch('/api/auth/change-password', {
           method: 'POST', credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ current_password: localBypass ? '' : cur, new_password: nw })
+          body: JSON.stringify({
+            current_password: cur,
+            new_password: nw,
+            biometric_token: usedBiometricToken
+          })
         });
         if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Failed'); }
-        setMsg(msgEl, localBypass ? 'Password set' : 'Password updated', 'var(--green)');
+        setMsg(msgEl, 'Password updated', 'var(--green)');
         el('settings-pw-current').value = '';
         el('settings-pw-new').value = '';
         el('settings-pw-confirm').value = '';
+        clearBiometricVerification();
       } catch (e) {
+        if (usedBiometricToken) clearBiometricVerification();
         setMsg(msgEl, e.message, 'var(--red)');
       } finally {
         saveBtn.disabled = false;

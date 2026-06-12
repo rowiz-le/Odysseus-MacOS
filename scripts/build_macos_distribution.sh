@@ -11,7 +11,12 @@ RESOURCES_DIR="$APP_BUNDLE/Contents/Resources"
 PAYLOAD_DIR="$RESOURCES_DIR/app"
 BUILD_TMP="$ROOT_DIR/.macos-build"
 DMG_ROOT="$BUILD_TMP/dmg-root"
-VERSION="${ODYSSEUS_VERSION:-$(date +%Y.%m.%d)}"
+VERSION_FILE="$ROOT_DIR/VERSION"
+DEFAULT_VERSION="$(date +%Y.%m.%d)"
+if [[ -f "$VERSION_FILE" ]]; then
+  DEFAULT_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
+fi
+VERSION="${ODYSSEUS_VERSION:-$DEFAULT_VERSION}"
 DMG_PATH="$DIST_DIR/${APP_NAME}-macOS-${VERSION}.dmg"
 
 echo "============================================================"

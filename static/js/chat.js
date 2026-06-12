@@ -722,6 +722,8 @@ import createResearchSynapse from './researchSynapse.js';
       const fd = new FormData();
       fd.append('message', _finalMsgWithInject);
       fd.append('session', streamSessionId);
+      const reasoningEffort = window.odysseusReasoning?.getCurrent?.() || 'auto';
+      fd.append('reasoning_effort', reasoningEffort);
       if (ids.length) fd.append('attachments', JSON.stringify(ids));
       // Auto-save & send active doc ID so the backend sees latest content
       if (documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {

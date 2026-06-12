@@ -2,12 +2,27 @@
 """Application-wide constants and configuration values."""
 import os
 
-APP_VERSION = "0.9.1"
-
 # Base paths
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__))) + "/"
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 DATA_DIR = os.path.join(BASE_DIR, "data")
+
+
+def _app_version() -> str:
+    configured = os.getenv("ODYSSEUS_APP_VERSION", "").strip()
+    if configured:
+        return configured
+    try:
+        with open(os.path.join(BASE_DIR, "VERSION"), encoding="utf-8") as version_file:
+            version = version_file.read().strip()
+            if version:
+                return version
+    except OSError:
+        pass
+    return "1.0"
+
+
+APP_VERSION = _app_version()
 
 # Data file paths
 SESSIONS_FILE = os.path.join(DATA_DIR, "sessions.json")

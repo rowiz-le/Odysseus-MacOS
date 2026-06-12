@@ -25,6 +25,7 @@ from routes.model_routes import (
     _is_chat_model,
     _classify_endpoint,
     _probe_endpoint,
+    _unhide_catalog_models,
     _truthy,
     _PROVIDER_CURATED,
 )
@@ -208,6 +209,14 @@ class TestClassifyEndpoint:
     def test_explicit_local_kind_on_public_host(self):
         # User explicitly marked it local — honour that.
         assert _classify_endpoint("https://example.com/v1", "local") == "local"
+
+
+def test_native_catalog_models_are_unhidden():
+    endpoint = types.SimpleNamespace(
+        hidden_models='["model-a", "old-embedding"]',
+    )
+    assert _unhide_catalog_models(endpoint, ["model-a"]) is True
+    assert endpoint.hidden_models == '["old-embedding"]'
 
 
 # ── setup probing ──

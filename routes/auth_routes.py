@@ -6,8 +6,10 @@ from typing import Optional
 import asyncio
 import logging
 import os
+import time
 
 from core.auth import AuthManager, RESERVED_USERNAMES
+from src.desktop_biometric import verify_biometric_token
 from src.rate_limiter import RateLimiter
 from src.settings_scrub import scrub_settings
 from src.settings import (
@@ -52,6 +54,7 @@ class SignupRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     current_password: str = ""
     new_password: str
+    biometric_token: str = ""
 
 
 class UpdateProfileRequest(BaseModel):
@@ -83,6 +86,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
     _login_limiter = RateLimiter(max_requests=15, window_seconds=60)
     _signup_limiter = RateLimiter(max_requests=3, window_seconds=300)
     _setup_limiter = RateLimiter(max_requests=3, window_seconds=300)
+    _used_biometric_nonces: dict[str, int] = {}
 
     _PROXY_FWD_HEADERS = (
         "cf-connecting-ip", "cf-ray", "cf-visitor",
@@ -107,6 +111,24 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             return None
         users = auth_manager.users or {}
         return next((u for u, d in users.items() if d.get("is_admin")), None) or next(iter(users), None)
+
+    def _consume_biometric_proof(request: Request, username: str, token: str) -> bool:
+        if not token or not _is_desktop_local_bypass(request):
+            return False
+        payload = verify_biometric_token(token, username)
+        if not payload:
+            return False
+
+        now = int(time.time())
+        for nonce, expires_at in list(_used_biometric_nonces.items()):
+            if expires_at <= now:
+                _used_biometric_nonces.pop(nonce, None)
+
+        nonce = payload["nonce"]
+        if nonce in _used_biometric_nonces:
+            return False
+        _used_biometric_nonces[nonce] = int(payload["exp"])
+        return True
 
     def _get_current_user(request: Request) -> Optional[str]:
         token = request.cookies.get(SESSION_COOKIE)
@@ -309,12 +331,14 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
         if len(body.new_password) < 8:
             raise HTTPException(400, "Password must be at least 8 characters")
         current_token = request.cookies.get(SESSION_COOKIE)
-        if _is_desktop_local_bypass(request):
+        if body.current_password:
+            ok = await asyncio.to_thread(auth_manager.change_password, user, body.current_password, body.new_password)
+        elif body.biometric_token:
+            if not _consume_biometric_proof(request, user, body.biometric_token):
+                raise HTTPException(400, "Touch ID verification is invalid or expired")
             ok = await asyncio.to_thread(auth_manager.set_password, user, body.new_password, user, True)
         else:
-            if not body.current_password:
-                raise HTTPException(400, "Current password is required")
-            ok = await asyncio.to_thread(auth_manager.change_password, user, body.current_password, body.new_password)
+            raise HTTPException(400, "Current password or Touch ID verification is required")
         if not ok:
             raise HTTPException(400, "Current password is incorrect")
         await asyncio.to_thread(auth_manager.revoke_user_sessions, user, current_token)

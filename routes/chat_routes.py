@@ -18,6 +18,7 @@ from src.llm_core import llm_call_async, stream_llm, stream_llm_with_fallback
 from src.agent_loop import stream_agent_loop
 from src import agent_runs
 from src.model_context import estimate_tokens
+from src.reasoning import normalize_reasoning_effort
 from src.chat_helpers import coerce_message_and_session
 from src.endpoint_resolver import normalize_base as _normalize_base, build_chat_url
 from src.prompt_security import untrusted_context_message
@@ -277,6 +278,7 @@ def setup_chat_routes(
         use_research = chat_request.use_research
         time_filter = chat_request.time_filter
         preset_id = chat_request.preset_id
+        reasoning_effort = normalize_reasoning_effort(chat_request.reasoning_effort)
 
         # Verify the caller owns this session before loading it.
         # Without this, any authenticated user can post into another user's chat.
@@ -343,8 +345,12 @@ def setup_chat_routes(
             temperature=ctx.preset.temperature,
             max_tokens=ctx.preset.max_tokens,
             prompt_type=preset_id,
+            reasoning_effort=reasoning_effort,
         )
-        _clean_reply, _clean_md = clean_thinking_for_save(reply, {"model": sess.model})
+        _clean_reply, _clean_md = clean_thinking_for_save(
+            reply,
+            {"model": sess.model, "reasoning_effort": reasoning_effort},
+        )
         sess.add_message(ChatMessage("assistant", _clean_reply, metadata=_clean_md))
 
         from core.database import update_session_last_accessed
@@ -396,6 +402,10 @@ def setup_chat_routes(
         compare_mode = str(form_data.get("compare_mode", "")).lower() == "true"
         incognito = str(form_data.get("incognito", "")).lower() == "true"
         chat_mode = str(form_data.get("mode", "")).lower()  # 'chat' or 'agent'
+        reasoning_effort = normalize_reasoning_effort(
+            form_data.get("reasoning_effort")
+            or ((body or {}).get("reasoning_effort") if isinstance(body, dict) else None)
+        )
 
         def _form_bool(value: Any) -> bool:
             if isinstance(value, bool):
@@ -851,7 +861,11 @@ def setup_chat_routes(
 
             # Send model name early so the frontend can show it during streaming
             _model_suffix = "Research" if do_research else None
-            _model_info = {"type": "model_info", "model": sess.model}
+            _model_info = {
+                "type": "model_info",
+                "model": sess.model,
+                "reasoning_effort": reasoning_effort,
+            }
             if chat_mode == "agent" and agent_runtime == "hermes":
                 try:
                     from src.hermes_bridge import hermes_model
@@ -915,6 +929,7 @@ def setup_chat_routes(
                         max_tokens=ctx.preset.max_tokens,
                         prompt_type=preset_id,
                         tools=None,
+                        reasoning_effort=reasoning_effort,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
@@ -1141,6 +1156,7 @@ def setup_chat_routes(
                         owner=_user,
                         fallbacks=_fallback_candidates,
                         workspace=workspace or None,
+                        reasoning_effort=reasoning_effort,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:

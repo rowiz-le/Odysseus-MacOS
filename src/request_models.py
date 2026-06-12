@@ -13,6 +13,7 @@ class ChatRequest(BaseModel):
     time_filter: Optional[str] = Field(default=None, description="Time filter for search")
     preset_id: Optional[str] = Field(default=None, description="Preset identifier")
     agent_runtime: Optional[str] = Field(default="odysseus", description="Agent runtime: odysseus or hermes")
+    reasoning_effort: Optional[str] = Field(default="auto", description="Reasoning effort preference")
     
     @field_validator('message')
     @classmethod
@@ -25,6 +26,12 @@ class ChatRequest(BaseModel):
         if v is not None and v not in ['day', 'week', 'month', 'year']:
             return None  # Just set to None if invalid rather than raising error
         return v
+
+    @field_validator('reasoning_effort')
+    @classmethod
+    def validate_reasoning_effort(cls, v):
+        from src.reasoning import normalize_reasoning_effort
+        return normalize_reasoning_effort(v)
 
 
 class SessionCreateRequest(BaseModel):

@@ -1036,3 +1036,54 @@ if (!window._odyEscExpandGuard) {
     else { try { topModal.classList.add('hidden'); } catch {} }
   }, true);
 }
+
+/**
+ * Display Version and Credits by fetching from /api/version
+ */
+export async function initCredits() {
+  if (document.getElementById('odysseus-credits')) return;
+
+  let versionText = 'v1.0';
+  let creditText = 'Remade by Rowiz';
+
+  try {
+    const response = await fetch('/api/version');
+    if (response.ok) {
+      const data = await response.json();
+      versionText = `v${data.version}`;
+      creditText = data.credits || creditText;
+    }
+  } catch (e) {
+    console.log('Odysseus UI: Could not fetch version, using fallback');
+  }
+
+  const creditDiv = document.createElement('div');
+  creditDiv.id = 'odysseus-credits';
+  creditDiv.innerHTML = `<span style="font-family: monospace;">Odysseus <span style="opacity: 0.6">${versionText}</span> | ${creditText}</span>`;
+
+  creditDiv.style.cssText = `
+    position: fixed;
+    bottom: 10px;
+    right: 15px;
+    font-size: 11px;
+    color: var(--fg, #ccc);
+    opacity: 0.4;
+    transition: opacity 0.3s ease;
+    z-index: 1000;
+    pointer-events: auto;
+    cursor: default;
+  `;
+
+  creditDiv.addEventListener('mouseenter', () => { creditDiv.style.opacity = '0.8'; });
+  creditDiv.addEventListener('mouseleave', () => { creditDiv.style.opacity = '0.4'; });
+  document.body.appendChild(creditDiv);
+}
+
+// Auto-init credits when the page loads
+if (typeof window !== 'undefined') {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initCredits);
+  } else {
+    initCredits();
+  }
+}

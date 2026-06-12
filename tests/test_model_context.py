@@ -2,6 +2,7 @@
 
 import pytest
 
+import src.model_context as model_context
 from src.model_context import _is_local_endpoint, estimate_tokens, _lookup_known
 
 
@@ -107,3 +108,17 @@ class TestLookupKnown:
         """Models with :free or :extended suffixes should still match."""
         result = _lookup_known("deepseek-r1:free")
         assert result == 64000
+
+
+def test_query_context_prefers_persisted_per_model_metadata(monkeypatch):
+    monkeypatch.setattr(model_context, "_configured_model_context", lambda url, model: 262144)
+    monkeypatch.setattr(model_context, "_configured_endpoint_kind", lambda url: "local")
+
+    def fail_if_queried(*args, **kwargs):
+        raise AssertionError("network should not be queried when metadata is persisted")
+
+    monkeypatch.setattr(model_context.httpx, "get", fail_if_queried)
+    assert model_context._query_context_length(
+        "http://127.0.0.1:1234/v1/chat/completions",
+        "qwen/qwen3.6-35b-a3b",
+    ) == 262144

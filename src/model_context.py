@@ -6,6 +6,7 @@ Provides token estimation for context usage tracking.
 """
 
 import logging
+import json
 import sys
 from typing import Dict, List, Optional, Tuple
 
@@ -62,6 +63,41 @@ def _configured_endpoint_kind(url: str) -> Optional[str]:
             db.close()
     except Exception:
         return None
+
+
+def _configured_model_context(url: str, model: str) -> Optional[int]:
+    """Read persisted per-model context metadata for a configured endpoint."""
+    target = _normalize_base_for_compare(url)
+    if not target or not model or "core.database" not in sys.modules:
+        return None
+    try:
+        from core.database import SessionLocal, ModelEndpoint
+        from src.model_catalog import find_model_metadata
+
+        db = SessionLocal()
+        try:
+            rows = db.query(ModelEndpoint).filter(ModelEndpoint.is_enabled == True).all()
+            for ep in rows:
+                base = _normalize_base_for_compare(getattr(ep, "base_url", "") or "")
+                if target != base and not target.startswith(base + "/"):
+                    continue
+                raw = getattr(ep, "model_metadata", None)
+                if not raw:
+                    return None
+                metadata = json.loads(raw) if isinstance(raw, str) else raw
+                item = find_model_metadata(metadata, model)
+                if not item:
+                    return None
+                for field in ("context_length", "max_context_length"):
+                    value = item.get(field)
+                    if isinstance(value, (int, float)) and value > 0:
+                        return int(value)
+                return None
+        finally:
+            db.close()
+    except Exception:
+        return None
+    return None
 
 
 def _is_local_endpoint(url: str) -> bool:
@@ -262,6 +298,10 @@ def _query_context_length(endpoint_url: str, model: str) -> int:
     known = _lookup_known(model)
     api_ctx = None
     configured_kind = _configured_endpoint_kind(endpoint_url)
+    configured_context = _configured_model_context(endpoint_url, model)
+    if configured_context:
+        logger.info(f"Using configured model metadata for {model}: {configured_context}")
+        return configured_context
 
     # Large OpenAI-compatible proxies can make /models expensive. If the
     # endpoint is explicitly configured as API/proxy, prefer known context
@@ -274,6 +314,19 @@ def _query_context_length(endpoint_url: str, model: str) -> int:
 
     # Try llama.cpp /slots endpoint first — reports actual serving context
     if _is_local_endpoint(endpoint_url):
+        try:
+            from src.model_catalog import fetch_lm_studio_catalog, find_model_metadata
+
+            catalog = fetch_lm_studio_catalog(endpoint_url, timeout=REQUEST_TIMEOUT)
+            if catalog is not None:
+                _, metadata = catalog
+                item = find_model_metadata(metadata, model)
+                if item:
+                    value = item.get("context_length") or item.get("max_context_length")
+                    if isinstance(value, (int, float)) and value > 0:
+                        return int(value)
+        except Exception:
+            pass
         try:
             base = endpoint_url.split("/v1")[0] if "/v1" in endpoint_url else endpoint_url.rsplit("/", 1)[0]
             r = httpx.get(f"{base}/slots", timeout=REQUEST_TIMEOUT)

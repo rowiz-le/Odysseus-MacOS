@@ -33,6 +33,87 @@ function _handlePickerKeydown(e, listEl, itemSelector, closeFn) {
 let _deps = null;
 let _pickerItems = [];
 let _pickerFetchPromise = null;
+const _REASONING_STORAGE_KEY = 'odysseus-model-reasoning';
+
+function _currentModelId() {
+  if (!_deps) return '';
+  const currentSessionId = _deps.getCurrentSessionId();
+  const session = (_deps.getSessions() || []).find(s => s.id === currentSessionId);
+  if (session && session.model) return session.model;
+  const pending = _deps.getPendingChat();
+  return (pending && pending.modelId) || '';
+}
+
+function _loadReasoningPreferences() {
+  try {
+    const value = JSON.parse(localStorage.getItem(_REASONING_STORAGE_KEY) || '{}');
+    return value && typeof value === 'object' ? value : {};
+  } catch {
+    return {};
+  }
+}
+
+function _reasoningForModel(modelId) {
+  if (!modelId) return 'auto';
+  return _loadReasoningPreferences()[modelId] || 'auto';
+}
+
+function _saveReasoningForModel(modelId, effort) {
+  if (!modelId) return;
+  const preferences = _loadReasoningPreferences();
+  preferences[modelId] = effort || 'auto';
+  localStorage.setItem(_REASONING_STORAGE_KEY, JSON.stringify(preferences));
+}
+
+function _metadataForModel(modelId) {
+  if (!modelId) return {};
+  const items = (window.modelsModule && window.modelsModule.getCachedItems)
+    ? (window.modelsModule.getCachedItems() || [])
+    : _pickerItems;
+  for (const item of items) {
+    const metadata = item.model_metadata || {};
+    if (metadata[modelId]) return metadata[modelId];
+    const basename = modelId.split('/').pop();
+    const match = Object.keys(metadata).find(key => key.split('/').pop() === basename);
+    if (match) return metadata[match];
+  }
+  return {};
+}
+
+function _formatContext(value) {
+  const context = Number(value || 0);
+  if (!context) return '';
+  if (context >= 1000000) return `${Math.round(context / 100000) / 10}M`;
+  if (context >= 1000) return `${Math.round(context / 1000)}K`;
+  return String(context);
+}
+
+function _syncReasoningControl(modelId = _currentModelId()) {
+  const select = document.getElementById('model-reasoning-select');
+  const hint = document.getElementById('model-reasoning-hint');
+  if (!select || !hint) return;
+  select.disabled = !modelId;
+  select.value = _reasoningForModel(modelId);
+  if (!modelId) {
+    hint.textContent = 'Select a model first';
+    return;
+  }
+  const metadata = _metadataForModel(modelId);
+  const parts = [];
+  const context = _formatContext(metadata.context_length || metadata.max_context_length);
+  if (context) parts.push(`${context} context`);
+  const nativeOptions = metadata.reasoning && metadata.reasoning.allowed_options;
+  if (Array.isArray(nativeOptions) && nativeOptions.length) {
+    parts.push(`Native reasoning: ${nativeOptions.join('/')}`);
+  } else {
+    parts.push('Portable reasoning guidance');
+  }
+  hint.textContent = parts.join(' | ');
+}
+
+export function getCurrentReasoningEffort() {
+  return _reasoningForModel(_currentModelId());
+}
 
 /**
  * Initialize the model picker dropdown.
@@ -45,6 +126,10 @@ let _pickerFetchPromise = null;
  */
 export function initModelPicker(deps) {
   _deps = deps;
+  window.odysseusReasoning = {
+    getCurrent: getCurrentReasoningEffort,
+    getForModel: _reasoningForModel,
+  };
   _initModelPickerDropdown();
 }
 
@@ -54,13 +139,21 @@ function _initModelPickerDropdown() {
   const menu = document.getElementById('model-picker-menu');
   const search = document.getElementById('model-picker-search');
   const listEl = document.getElementById('model-picker-list');
+  const reasoningSelect = document.getElementById('model-reasoning-select');
   if (!wrap || !btn || !menu || !search || !listEl) return;
+
+  // Guard: prevent duplicate initialization if sessions.js is loaded multiple times
+  if (btn.dataset.pickerWired) return;
+  btn.dataset.pickerWired = 'true';
 
   let _closeTimer = null;
   let _closeSeq = 0;
+  let _justOpened = false;  // guard against same-event open→close race
+  const _menuOwner = menu.parentElement;  // remember original parent for restore
 
   function _close() {
     if (menu.classList.contains('hidden')) return;
+    console.debug('[ModelPicker] _close() called from:', new Error().stack);
     const closeToken = ++_closeSeq;
     // Restore scroll button
     const _scrollBtn = document.getElementById('scroll-bottom-btn');
@@ -76,6 +169,10 @@ function _initModelPickerDropdown() {
       menu.classList.remove('closing');
       menu.classList.add('hidden');
       search.value = '';
+      // Restore menu to original parent (was portaled to body on open)
+      if (menu.parentElement === document.body && _menuOwner) {
+        _menuOwner.appendChild(menu);
+      }
     }, { once: true });
     // Fallback if animationend doesn't fire
     if (_closeTimer) clearTimeout(_closeTimer);
@@ -85,6 +182,10 @@ function _initModelPickerDropdown() {
         menu.classList.remove('closing');
         menu.classList.add('hidden');
         search.value = '';
+        // Restore menu to original parent
+        if (menu.parentElement === document.body && _menuOwner) {
+          _menuOwner.appendChild(menu);
+        }
       }
       _closeTimer = null;
     }, 200);
@@ -191,6 +292,7 @@ function _initModelPickerDropdown() {
           url: item.url,
           endpointId: item.endpoint_id,
           epName: item.endpoint_name || '',
+          metadata: (item.model_metadata || {})[mid] || {},
           stale: isLocalDead,
           staleReason: isLocalDead ? (probeResult.error || 'not responding') : '',
         });
@@ -241,6 +343,20 @@ function _initModelPickerDropdown() {
       const nameSpan = document.createElement('span');
       nameSpan.textContent = m.display;
       row.appendChild(nameSpan);
+      const context = _formatContext(m.metadata && (m.metadata.context_length || m.metadata.max_context_length));
+      if (context) {
+        const contextBadge = document.createElement('span');
+        contextBadge.className = 'model-meta-badge';
+        contextBadge.textContent = context;
+        contextBadge.title = `${Number(m.metadata.context_length || m.metadata.max_context_length).toLocaleString()} token context window`;
+        row.appendChild(contextBadge);
+      }
+      if (m.metadata && m.metadata.reasoning) {
+        const reasoningBadge = document.createElement('span');
+        reasoningBadge.className = 'model-meta-badge';
+        reasoningBadge.textContent = 'Reasoning';
+        row.appendChild(reasoningBadge);
+      }
       if (m.stale) {
         const badge = document.createElement('span');
         badge.className = 'model-switch-stale-badge';
@@ -295,6 +411,7 @@ function _initModelPickerDropdown() {
       _deps.setPendingChat({ url: m.url, modelId: m.mid, endpointId: m.endpointId });
       // Header stays as session name — model switch only updates picker
       updateModelPicker();
+      _syncReasoningControl(m.mid);
       uiModule.showToast(`Using ${m.display}`);
       // Close picker after successful selection
       _close();
@@ -336,11 +453,16 @@ function _initModelPickerDropdown() {
     }
     // Update picker visibility — model is now set
     updateModelPicker();
+    _syncReasoningControl(m.mid);
     uiModule.showToast(`Using ${m.display}`);
     // Close picker after successful selection
     _close();
     if (document.activeElement) document.activeElement.blur();
   }
+
+  // Prevent pointerdown from stealing focus (keeps mobile keyboard up),
+  // same pattern used by the overflow menu button in app.js.
+  btn.addEventListener('pointerdown', (e) => { e.preventDefault(); });
 
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -352,13 +474,32 @@ function _initModelPickerDropdown() {
         _closeTimer = null;
       }
       menu.classList.remove('closing', 'hidden');
+
+      // Portal menu to <body> so it escapes any ancestor container-type /
+      // stacking-context traps (same fix applied to the overflow menu).
+      if (menu.parentElement !== document.body) document.body.appendChild(menu);
+
+      // Position the menu above the button (viewport-relative, since portaled).
+      const _btnRect = btn.getBoundingClientRect();
+      menu.style.position = 'fixed';
+      menu.style.bottom = (window.innerHeight - _btnRect.top + 4) + 'px';
+      menu.style.left = _btnRect.left + 'px';
+      menu.style.right = 'auto';
+      menu.style.top = 'auto';
+
+      // Guard: ignore document click events that fire as part of this same
+      // open gesture (touchend → click can bubble to document even when
+      // stopPropagation is called, depending on capture listeners).
+      _justOpened = true;
+      setTimeout(() => { _justOpened = false; }, 50);
+
       const hasModels = _cachedModelItems().length > 0 || _pickerItems.length > 0;
       if (hasModels) _populate('');
       else _showPickerStatus('Loading models...');
+      _syncReasoningControl();
       // Kick off a local-endpoint probe — when it returns, re-render
       // the list so stale local servers get dimmed. Cloud entries
       // aren't probed; they stay visible.
-      // FIX: Only re-render if picker is still open after probe completes
       Promise.allSettled([_ensurePickerItems(), _refreshLocalProbe()]).then(() => {
         // Only re-render if picker hasn't been closed in the meantime
         if (!menu.classList.contains('hidden') && !menu.classList.contains('closing')) {
@@ -388,7 +529,23 @@ function _initModelPickerDropdown() {
   search.addEventListener('keydown', (e) => {
     _handlePickerKeydown(e, listEl, '.model-switch-item', _close);
   });
+  if (reasoningSelect) {
+    reasoningSelect.addEventListener('click', (e) => e.stopPropagation());
+    reasoningSelect.addEventListener('change', (e) => {
+      const modelId = _currentModelId();
+      _saveReasoningForModel(modelId, e.target.value);
+      _syncReasoningControl(modelId);
+      uiModule.showToast(`Reasoning: ${e.target.options[e.target.selectedIndex].text}`);
+    });
+  }
+  document.addEventListener('odysseus:models-refreshed', () => {
+    _syncReasoningControl();
+    if (!menu.classList.contains('hidden') && !menu.classList.contains('closing')) {
+      _populate(search.value || '');
+    }
+  });
   document.addEventListener('click', (e) => {
+    if (_justOpened) return;  // ignore the click that opened the menu
     if (!menu.classList.contains('hidden') && !menu.contains(e.target) && !btn.contains(e.target)) {
       _close();
     }
@@ -459,4 +616,5 @@ export function updateModelPicker() {
   } else {
     label.textContent = displayName;
   }
+  _syncReasoningControl(modelId);
 }

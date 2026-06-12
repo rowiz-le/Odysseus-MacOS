@@ -30,6 +30,7 @@ from src.endpoint_resolver import (
     build_headers,
 )
 from src.auth_helpers import _auth_disabled, owner_filter
+from src.model_catalog import fetch_lm_studio_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -486,8 +487,36 @@ def _cached_model_ids(ep: Any) -> List[str]:
     return _parse_model_list(getattr(ep, "cached_models", None))
 
 
+def _model_metadata(ep: Any) -> Dict[str, Dict[str, Any]]:
+    raw = getattr(ep, "model_metadata", None)
+    if not raw:
+        return {}
+    try:
+        value = json.loads(raw) if isinstance(raw, str) else raw
+    except Exception:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {
+        str(model_id): item
+        for model_id, item in value.items()
+        if isinstance(item, dict)
+    }
+
+
 def _hidden_model_ids(ep: Any) -> set:
     return set(_parse_model_list(getattr(ep, "hidden_models", None)))
+
+
+def _unhide_catalog_models(ep: Any, model_ids: List[str]) -> bool:
+    """Native catalogs are authoritative; rediscovered LLMs must be visible."""
+    hidden = _parse_model_list(getattr(ep, "hidden_models", None))
+    remaining = [model_id for model_id in hidden if model_id not in set(model_ids)]
+    serialized = json.dumps(remaining) if remaining else None
+    if getattr(ep, "hidden_models", None) == serialized:
+        return False
+    ep.hidden_models = serialized
+    return True
 
 
 def _is_ollama_base(base_url: str) -> bool:
@@ -644,7 +673,7 @@ def _effective_endpoint_kind(ep: Any, base_url: str) -> str:
 
 
 
-def _probe_endpoint(base_url: str, api_key: str = None, timeout: int = 5) -> List[str]:
+def _probe_endpoint_standard(base_url: str, api_key: str = None, timeout: int = 5) -> List[str]:
     """Probe a base URL's /models endpoint and return list of model IDs.
     For Anthropic, queries their /v1/models API, falling back to hardcoded list."""
     from src.endpoint_resolver import resolve_url
@@ -727,6 +756,23 @@ def _probe_endpoint(base_url: str, api_key: str = None, timeout: int = 5) -> Lis
         logger.info(f"Using curated fallback for {curated_key}: {fallback}")
         return list(fallback)
     return []
+
+
+def _probe_endpoint_catalog(
+    base_url: str,
+    api_key: str = None,
+    timeout: int = 5,
+) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
+    """Probe IDs plus rich metadata when the server exposes it."""
+    catalog = fetch_lm_studio_catalog(base_url, api_key, timeout=timeout)
+    if catalog is not None:
+        return catalog
+    return _probe_endpoint_standard(base_url, api_key, timeout), {}
+
+
+def _probe_endpoint(base_url: str, api_key: str = None, timeout: int = 5) -> List[str]:
+    models, _ = _probe_endpoint_catalog(base_url, api_key, timeout)
+    return models
 
 
 def _ping_endpoint(base_url: str, api_key: str = None, timeout: float = 1.5) -> Dict[str, Any]:
@@ -996,22 +1042,29 @@ def setup_model_routes(model_discovery):
 
                     def _probe_one(key: str, data: Dict[str, Any]):
                         try:
-                            ids = _probe_endpoint(data["base"], data.get("api_key"), timeout=data.get("timeout") or 2)
-                            return key, data["endpoint_ids"], ids, None
+                            ids, metadata = _probe_endpoint_catalog(
+                                data["base"],
+                                data.get("api_key"),
+                                timeout=data.get("timeout") or 2,
+                            )
+                            return key, data["endpoint_ids"], ids, metadata, None
                         except Exception as e:
-                            return key, data["endpoint_ids"], None, e
+                            return key, data["endpoint_ids"], None, {}, e
 
                     if groups:
                         with ThreadPoolExecutor(max_workers=min(4, len(groups))) as pool:
                             futures = [pool.submit(_probe_one, key, data) for key, data in groups.items()]
                             for fut in as_completed(futures):
-                                key, endpoint_ids, ids, err = fut.result()
+                                key, endpoint_ids, ids, metadata, err = fut.result()
                                 st = _refresh_state.setdefault(key, {})
                                 if ids:
                                     for ep_id in endpoint_ids:
                                         ep_obj = db.query(ModelEndpoint).filter(ModelEndpoint.id == ep_id).first()
                                         if ep_obj:
                                             ep_obj.cached_models = json.dumps(ids)
+                                            ep_obj.model_metadata = json.dumps(metadata) if metadata else None
+                                            if metadata:
+                                                _unhide_catalog_models(ep_obj, ids)
                                             changed = True
                                     st["last_success"] = _time.time()
                                     st["fail_count"] = 0
@@ -1062,6 +1115,7 @@ def setup_model_routes(model_discovery):
             provider = _detect_provider(base)
             # Merge cached + pinned models, then filter out hidden ones
             ep_model_type = getattr(ep, "model_type", None) or "llm"
+            metadata = _model_metadata(ep)
             model_ids = _visible_models(
                 _cached_model_ids(ep),
                 ep.hidden_models,
@@ -1095,6 +1149,11 @@ def setup_model_routes(model_discovery):
                     "category": category,
                     "endpoint_kind": kind,
                     "model_type": ep_model_type,
+                    "model_metadata": {
+                        model_id: metadata[model_id]
+                        for model_id in _merge_model_ids(curated, extra)
+                        if model_id in metadata
+                    },
                 })
             else:
                 # Endpoint unreachable but still show it greyed out
@@ -1111,10 +1170,46 @@ def setup_model_routes(model_discovery):
                     "category": category,
                     "endpoint_kind": kind,
                     "model_type": ep_model_type,
+                    "model_metadata": {},
                     "offline": True,
                 })
 
         return {"hosts": [], "items": items}
+
+    def _refresh_lm_studio_now(owner: str = "", is_admin: bool = False) -> bool:
+        """Synchronize LM Studio's native catalog before serving a forced refresh."""
+        db = SessionLocal()
+        changed = False
+        try:
+            q = db.query(ModelEndpoint).filter(ModelEndpoint.is_enabled == True)
+            if owner and not is_admin:
+                q = owner_filter(q, ModelEndpoint, owner)
+            for ep in q.all():
+                catalog = fetch_lm_studio_catalog(
+                    _normalize_base(ep.base_url),
+                    ep.api_key,
+                    timeout=min(_endpoint_refresh_timeout(ep, "local"), 3),
+                )
+                if catalog is None:
+                    continue
+                model_ids, metadata = catalog
+                cached_json = json.dumps(model_ids)
+                metadata_json = json.dumps(metadata) if metadata else None
+                if ep.cached_models != cached_json:
+                    ep.cached_models = cached_json
+                    changed = True
+                if getattr(ep, "model_metadata", None) != metadata_json:
+                    ep.model_metadata = metadata_json
+                    changed = True
+                if _unhide_catalog_models(ep, model_ids):
+                    changed = True
+            if changed:
+                db.commit()
+        finally:
+            db.close()
+        if changed:
+            _invalidate_models_cache()
+        return changed
 
     @router.get("/models")
     def api_models(request: Request, refresh: bool = False):
@@ -1146,6 +1241,8 @@ def setup_model_routes(model_discovery):
                 _is_admin = bool(auth_mgr.is_admin(owner))
         except Exception:
             _is_admin = False
+        if refresh:
+            _refresh_lm_studio_now(owner=owner, is_admin=_is_admin)
         now = _time.time()
         # Cache key includes the admin flag so a demotion / promotion doesn't
         # serve the wrong scoped view from cache.
@@ -1347,7 +1444,7 @@ def setup_model_routes(model_discovery):
             ok_count = 0
             for ep in ep_data:
                 base = _normalize_base(ep["base_url"])
-                all_models = _probe_endpoint(base, ep.get("api_key"))
+                all_models, metadata = _probe_endpoint_catalog(base, ep.get("api_key"))
                 # Update cached_models in DB
                 if all_models:
                     db2 = SessionLocal()
@@ -1355,6 +1452,7 @@ def setup_model_routes(model_discovery):
                         ep_obj = db2.query(ModelEndpoint).filter(ModelEndpoint.id == ep["id"]).first()
                         if ep_obj:
                             ep_obj.cached_models = json.dumps(all_models)
+                            ep_obj.model_metadata = json.dumps(metadata) if metadata else None
                             db2.commit()
                     finally:
                         db2.close()
@@ -1543,13 +1641,14 @@ def setup_model_routes(model_discovery):
                     existing.api_key = api_key.strip()
                     changed = True
                 if should_probe:
-                    probed_models = _probe_endpoint(
+                    probed_models, probed_metadata = _probe_endpoint_catalog(
                         base_url,
                         (api_key.strip() or existing.api_key or None),
                         timeout=_explicit_model_list_timeout(base_url, existing_kind_for_probe, refresh_timeout),
                     )
                     if probed_models:
                         existing.cached_models = json.dumps(probed_models)
+                        existing.model_metadata = json.dumps(probed_metadata) if probed_metadata else None
                         changed = True
                 if changed:
                     _db_dedup.commit()
@@ -1577,7 +1676,10 @@ def setup_model_routes(model_discovery):
         finally:
             _db_dedup.close()
 
-        model_ids = _probe_endpoint(base_url, api_key.strip() or None, timeout=explicit_timeout) if should_probe else []
+        model_ids, model_metadata = (
+            _probe_endpoint_catalog(base_url, api_key.strip() or None, timeout=explicit_timeout)
+            if should_probe else ([], {})
+        )
         ping = {"reachable": False, "error": None}
         if (should_probe or requested_kind in ("api", "proxy")) and not model_ids:
             ping = _ping_endpoint(base_url, api_key.strip() or None, timeout=min(explicit_timeout, 2.0))
@@ -1609,6 +1711,7 @@ def setup_model_routes(model_discovery):
                 model_refresh_interval=refresh_interval,
                 model_refresh_timeout=refresh_timeout,
                 cached_models=json.dumps(model_ids) if model_ids else None,
+                model_metadata=json.dumps(model_metadata) if model_metadata else None,
                 pinned_models=json.dumps(_pinned) if _pinned else None,
                 supports_tools=_st,
                 owner=_owner_val,
@@ -1662,7 +1765,7 @@ def setup_model_routes(model_discovery):
         requested_kind = _normalize_endpoint_kind(endpoint_kind)
         configured_timeout = _parse_positive_int(model_refresh_timeout, minimum=1, maximum=60)
         probe_timeout = _explicit_model_list_timeout(base_url, requested_kind, configured_timeout)
-        models = _probe_endpoint(base_url, api_key.strip() or None, timeout=probe_timeout)
+        models, metadata = _probe_endpoint_catalog(base_url, api_key.strip() or None, timeout=probe_timeout)
         ping = {"reachable": True, "error": None} if models else _ping_endpoint(base_url, api_key.strip() or None, timeout=min(probe_timeout, 2.0))
         return {
             "base_url": base_url,
@@ -1670,6 +1773,7 @@ def setup_model_routes(model_discovery):
             "status": "online" if models else ("empty" if ping.get("reachable") else "offline"),
             "ping_error": ping.get("error") if ping else None,
             "models": models,
+            "model_metadata": metadata,
             "count": len(models),
             "endpoint_kind": requested_kind,
             "category": _classify_endpoint(base_url, requested_kind),
@@ -1689,7 +1793,7 @@ def setup_model_routes(model_discovery):
             db.close()
 
         base = _normalize_base(ep_data["base_url"])
-        all_models = _probe_endpoint(base, ep_data["api_key"])
+        all_models, metadata = _probe_endpoint_catalog(base, ep_data["api_key"])
         chat_models = [m for m in all_models if _is_chat_model(m)]
         skipped = len(all_models) - len(chat_models)
 
@@ -1716,6 +1820,7 @@ def setup_model_routes(model_discovery):
                     ep_obj.hidden_models = json.dumps(failed) if failed else None
                     if all_models:
                         ep_obj.cached_models = json.dumps(all_models)
+                        ep_obj.model_metadata = json.dumps(metadata) if metadata else None
                     db2.commit()
             finally:
                 db2.close()
@@ -1748,13 +1853,15 @@ def setup_model_routes(model_discovery):
                 category = _classify_endpoint(base, kind)
                 timeout = _manual_refresh_timeout(ep, category, refresh_timeout)
                 try:
-                    probed = _probe_endpoint(base, ep.api_key, timeout=timeout)
+                    probed, metadata = _probe_endpoint_catalog(base, ep.api_key, timeout=timeout)
                 except Exception as exc:
                     logger.warning("Manual model refresh failed for endpoint %s at %s: %s", ep_id, base, exc)
                     probed = []
+                    metadata = {}
                 if probed:
                     all_models = probed
                     ep.cached_models = json.dumps(all_models)
+                    ep.model_metadata = json.dumps(metadata) if metadata else None
                     db.commit()
                     _invalidate_models_cache()
                     response.headers["X-Model-Refresh-Status"] = "refreshed"
@@ -1770,6 +1877,7 @@ def setup_model_routes(model_discovery):
                     "display": m.split("/")[-1],
                     "is_hidden": m in hidden,
                     "is_pinned": m in pinned_set,
+                    "metadata": _model_metadata(ep).get(m, {}),
                 }
                 for m in _merge_model_ids(all_models, pinned)
             ]

@@ -2,7 +2,6 @@
 import mimetypes
 import os
 
-
 def register_static_mime_types() -> None:
     """Force stable JS module MIME types across platforms.
 
@@ -14,7 +13,6 @@ def register_static_mime_types() -> None:
 
     mimetypes.add_type("text/javascript", ".js")
     mimetypes.add_type("application/javascript", ".mjs")
-
 
 register_static_mime_types()
 
@@ -106,7 +104,6 @@ app.add_middleware(
 # ========= SECURITY HEADERS MIDDLEWARE =========
 app.add_middleware(SecurityHeadersMiddleware)
 
-
 # ========= REQUEST TIMEOUT (FALLBACK FOR HUNG HANDLERS) =========
 # If a single request takes longer than REQUEST_HARD_TIMEOUT, abort it and
 # return 504 instead of holding the event loop hostage. Whitelisted paths
@@ -130,7 +127,6 @@ _TIMEOUT_EXEMPT_PREFIXES = (
     "/api/image",           # diffusion proxies (inpaint/harmonize/upscale/etc.) — own 120s httpx timeout
 )
 
-
 class _RequestTimeoutMiddleware(_BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.url.path or ""
@@ -143,7 +139,6 @@ class _RequestTimeoutMiddleware(_BaseHTTPMiddleware):
                 {"detail": f"Request exceeded {REQUEST_HARD_TIMEOUT:.0f}s timeout"},
                 status_code=504,
             )
-
 
 app.add_middleware(_RequestTimeoutMiddleware)
 
@@ -373,7 +368,6 @@ else:
 # ========= STATIC FILES =========
 os.makedirs(STATIC_DIR, exist_ok=True)
 
-
 class _RevalidatingStatic(StaticFiles):
     """Serve static assets normally, but force the browser to REVALIDATE
     source files (.js/.css/.html) on every load instead of serving a stale
@@ -388,7 +382,6 @@ class _RevalidatingStatic(StaticFiles):
         if path.endswith((".js", ".css", ".html")):
             resp.headers["Cache-Control"] = "no-cache"
         return resp
-
 
 app.mount("/static", _RevalidatingStatic(directory="static"), name="static")
 
@@ -674,7 +667,6 @@ app.include_router(setup_backup_routes(memory_manager, preset_manager, skills_ma
 from routes.font_routes import setup_font_routes
 app.include_router(setup_font_routes())
 
-
 # MCP (Model Context Protocol)
 from src.mcp_manager import McpManager
 from src.agent_tools import set_mcp_manager
@@ -803,7 +795,7 @@ async def serve_login(request: Request):
 @app.get("/api/version")
 async def get_version():
     from core.constants import APP_VERSION
-    return {"version": APP_VERSION}
+    return {"version": APP_VERSION, "credits": "Remade by Rowiz"}
 
 @app.get("/api/health")
 async def health_check() -> Dict[str, str]:
@@ -852,7 +844,6 @@ async def _lifespan(app):
     await _shutdown_event()
 
 app.router.lifespan_context = _lifespan
-
 
 async def _startup_event():
     global upload_cleanup_task
