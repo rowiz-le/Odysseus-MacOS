@@ -49,19 +49,27 @@ chạy trên máy của bạn, với dữ liệu của bạn, ưu tiên local-fi
   - **Works on mobile** -- looks and runs great on your phone, not just desktop.<br>　<sub>responsive · installable (PWA) · touch gestures</sub>
   - **Extras** -- more to explore, happy if you give it a go!<br>　<sub>image editor · theme editor · file uploads (vision + PDF) · web search · presets · sessions · 2FA</sub>
 
-## Demo
-A full, hover-to-play tour lives on the landing page (`docs/index.html`). A few looks:
+## Giao diện hiện tại
 
-### Chat & Agents
-![Chat & Agents](docs/chat.gif)
-### Deep Research
-![Deep Research](docs/research.gif)
-### Compare
-![Compare](docs/compare.gif)
-### Documents
-![Documents](docs/document.gif)
-### Notes & Tasks
-![Notes & Tasks](docs/notes.gif)
+Các ảnh dưới đây được chụp trực tiếp từ **Odysseus macOS v2026.06.12**.
+
+### Chat & Agent
+
+![Chat và Agent trên Odysseus macOS](docs/chat-macos.jpg)
+
+### Model local, Context Window & Reasoning
+
+Odysseus tự đồng bộ model từ LM Studio, hiển thị context window của từng
+model và cho phép chọn mức suy luận phù hợp.
+
+![Model local, context window và reasoning](docs/models-reasoning-macos.jpg)
+
+### Tài khoản & bảo mật
+
+Đổi mật khẩu yêu cầu nhập mật khẩu hiện tại. Bản macOS cũng hỗ trợ xác thực
+sinh trắc học qua Touch ID trên thiết bị tương thích.
+
+![Tài khoản và bảo mật](docs/account-security-macos.jpg)
 
 ## Quick Start
 
