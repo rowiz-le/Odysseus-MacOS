@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
+from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, Iterable, List, Optional
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -17,6 +20,10 @@ logger = logging.getLogger(__name__)
 
 class HermesBridgeError(RuntimeError):
     """User-facing Hermes bridge failure."""
+
+
+_DEFAULT_API_KEY = "change-me-local-dev"
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
 def _sse(data: Dict[str, Any]) -> str:
@@ -31,8 +38,53 @@ def _base_url() -> str:
     return str(get_setting("hermes_api_base", "http://127.0.0.1:8642/v1") or "").rstrip("/")
 
 
+def _is_loopback_base(base: str) -> bool:
+    try:
+        return (urlsplit(base).hostname or "").lower() in _LOOPBACK_HOSTS
+    except ValueError:
+        return False
+
+
+def _read_hermes_env_key() -> str:
+    hermes_home = Path(os.environ.get("HERMES_HOME", "~/.hermes")).expanduser()
+    try:
+        lines = hermes_home.joinpath(".env").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+
+    for raw_line in lines:
+        line = raw_line.strip()
+        if line.startswith("export "):
+            line = line[7:].lstrip()
+        name, separator, value = line.partition("=")
+        if separator and name.strip() == "API_SERVER_KEY":
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                value = value[1:-1]
+            return value.strip()
+    return ""
+
+
+def _api_key() -> str:
+    configured = str(get_setting("hermes_api_key", "") or "").strip()
+    if configured and configured != _DEFAULT_API_KEY:
+        return configured
+
+    # Hermes generates and persists its own gateway key in ~/.hermes/.env.
+    # The desktop app historically kept the placeholder default, causing every
+    # local run request to fail with 401 after Hermes rotated that key.
+    if _is_loopback_base(_base_url()):
+        local_key = _read_hermes_env_key()
+        if local_key:
+            return local_key
+        process_key = str(os.environ.get("API_SERVER_KEY", "") or "").strip()
+        if process_key:
+            return process_key
+    return configured
+
+
 def _headers() -> Dict[str, str]:
-    key = str(get_setting("hermes_api_key", "") or "").strip()
+    key = _api_key()
     headers = {"Accept": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -120,7 +172,7 @@ def _extract_sse_payload(line: str) -> Optional[Any]:
 
 
 def _event_delta(event: Dict[str, Any]) -> str:
-    for key in ("delta", "text", "output_text", "content"):
+    for key in ("delta", "text", "output_text", "content", "output"):
         val = event.get(key)
         if isinstance(val, str):
             return val
@@ -137,7 +189,29 @@ def _event_delta(event: Dict[str, Any]) -> str:
     return ""
 
 
-def _map_hermes_event(event: Any, run_id: str) -> Iterable[str]:
+def _response_error(response: httpx.Response) -> str:
+    message = ""
+    try:
+        payload = response.json()
+        error = payload.get("error") if isinstance(payload, dict) else None
+        if isinstance(error, dict):
+            message = str(error.get("message") or error.get("code") or "")
+        elif error:
+            message = str(error)
+        elif isinstance(payload, dict):
+            message = str(payload.get("message") or payload.get("detail") or "")
+    except (ValueError, TypeError):
+        message = response.text.strip()
+
+    if response.status_code == 401:
+        return (
+            "Hermes từ chối khóa API. Hãy đồng bộ API_SERVER_KEY trong "
+            "~/.hermes/.env với cấu hình Odysseus."
+        )
+    return message or response.text.strip() or response.reason_phrase
+
+
+def _map_hermes_event(event: Any, run_id: str, emitted_text: str = "") -> Iterable[str]:
     if event is None:
         return []
     if event == "[DONE]":
@@ -147,6 +221,12 @@ def _map_hermes_event(event: Any, run_id: str) -> Iterable[str]:
 
     etype = str(event.get("type") or event.get("object") or "")
     delta = _event_delta(event)
+    is_snapshot = not isinstance(event.get("delta"), str)
+    if delta and emitted_text and is_snapshot:
+        if delta == emitted_text:
+            delta = ""
+        elif delta.startswith(emitted_text):
+            delta = delta[len(emitted_text):]
     if delta:
         return [_sse({"delta": delta})]
 
@@ -225,6 +305,7 @@ async def stream_hermes_agent(
     run_id = ""
     started = time.time()
     completed = False
+    emitted_text = ""
 
     timeout = httpx.Timeout(connect=5.0, read=None, write=30.0, pool=5.0)
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -236,7 +317,8 @@ async def stream_hermes_agent(
             )
             if create.status_code >= 400:
                 raise HermesBridgeError(
-                    f"Hermes API rejected the run (HTTP {create.status_code}): {create.text[:500]}"
+                    f"Hermes API rejected the run (HTTP {create.status_code}): "
+                    f"{_response_error(create)[:500]}"
                 )
             data = create.json() if create.content else {}
             run_id = str(data.get("run_id") or data.get("id") or "")
@@ -254,9 +336,17 @@ async def stream_hermes_agent(
                     )
                 async for line in events.aiter_lines():
                     payload = _extract_sse_payload(line)
-                    for chunk in _map_hermes_event(payload, run_id):
+                    for chunk in _map_hermes_event(payload, run_id, emitted_text):
                         if chunk == _done():
                             completed = True
+                        elif chunk.startswith("data: "):
+                            try:
+                                mapped = json.loads(chunk[6:])
+                                delta = mapped.get("delta")
+                                if isinstance(delta, str):
+                                    emitted_text += delta
+                            except (json.JSONDecodeError, AttributeError):
+                                pass
                         yield chunk
                     await asyncio.sleep(0)
 

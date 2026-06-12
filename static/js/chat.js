@@ -1336,7 +1336,10 @@ import createResearchSynapse from './researchSynapse.js';
               // Handle SSE error events (e.g. HTTP 404 from provider)
               if (_nextIsError || json.status >= 400) {
                 _nextIsError = false;
-                const errMsg = json.text || json.error?.message || `Error ${json.status || 'unknown'}`;
+                const errMsg = json.message
+                  || json.text
+                  || (typeof json.error === 'string' ? json.error : json.error?.message)
+                  || `Error ${json.status || 'unknown'}`;
                 console.error('Stream error:', errMsg);
                 if (spinner && spinner.element) spinner.destroy();
                 typewriterInto(roundHolder.querySelector('.body'), errMsg);
