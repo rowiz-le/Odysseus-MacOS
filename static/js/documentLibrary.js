@@ -75,6 +75,28 @@ function _hlSearch(text) {
                        '<mark class="doclib-search-hl">$1</mark>');
   } catch { return esc; }
 }
+
+function _downloadResearchExport(researchId, format) {
+  const a = document.createElement('a');
+  a.href = `${API_BASE}/api/research/export/${encodeURIComponent(researchId)}?format=${encodeURIComponent(format)}`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  uiModule?.showToast?.(`Exporting ${format === 'markdown' ? 'Markdown' : format.toUpperCase()} report`);
+}
+
+async function _openResearchExportFolder() {
+  try {
+    const res = await fetch(`${API_BASE}/api/research/open-export-folder`, {
+      method: 'POST',
+      credentials: 'same-origin',
+    });
+    if (!res.ok) throw new Error(res.statusText);
+    uiModule?.showToast?.('Opened the Deep Research export folder');
+  } catch {
+    uiModule?.showError?.('Open folder is available in the macOS desktop app');
+  }
+}
 let _libraryEscHandler = null;
 let _librarySelectMode = false;
 let _librarySelectedIds = new Set();
@@ -179,6 +201,8 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
     delete: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>',
     clone: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
     copy: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>',
+    export: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>',
+    folder: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 2h11v10H3z"/><path d="M3 7V5h6l2 2"/></svg>',
   };
 
   function _showLibDropdown(anchor, items, opts) {
@@ -1606,6 +1630,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
           <div id="doclib-panel-research" data-doclib-panel="research" class="admin-card" style="display:none;flex:1;flex-direction:column;overflow:hidden;">
             <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:2px;margin-top:10px;">
               <h2 style="margin:0;padding:0;line-height:1;">Research <span id="doclib-research-stats" class="memory-count" style="font-size:0.6em;opacity:0.6;font-weight:normal"></span></h2>
+              <button class="memory-toolbar-btn" id="doclib-research-folder-btn" title="Open the folder containing exported reports" style="margin-left:auto;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;"><path d="M3 7h5l2 2h11v10H3z"/><path d="M3 7V5h6l2 2"/></svg> Open Folder</button>
             </div>
             <p class="memory-desc doclib-desc" style="position:relative;top:-1px;">Completed deep research reports. Click to view.</p>
             <div class="memory-toolbar">
@@ -2855,6 +2880,10 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
                 a.click();
                 a.remove();
               } },
+            { label: 'Export HTML', icon: 'export', action: () => _downloadResearchExport(rid, 'html') },
+            { label: 'Export Markdown', icon: 'export', action: () => _downloadResearchExport(rid, 'markdown') },
+            { label: 'Export JSON', icon: 'export', action: () => _downloadResearchExport(rid, 'json') },
+            { label: 'Open Export Folder', icon: 'folder', action: _openResearchExportFolder },
             { label: _researchArchivedView ? 'Restore' : 'Archive', action: async () => {
                 const toArchived = !_researchArchivedView;
                 const card = btn.closest('.doclib-research-card');
@@ -2902,6 +2931,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
         _renderResearchGrid();
       });
     }
+    document.getElementById('doclib-research-folder-btn')?.addEventListener('click', _openResearchExportFolder);
 
     function _updateResearchCount() {
       const el = document.getElementById('doclib-research-selected-count');

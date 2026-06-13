@@ -12,11 +12,14 @@ and wraps them in an editorial-quality HTML document with:
 - Collapsible compact sources list
 - Print/Share toolbar
 """
+import base64
 import html
 import json
 import logging
 import re
 from datetime import datetime
+from functools import lru_cache
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from bs4 import BeautifulSoup
@@ -49,6 +52,44 @@ _REPORT_ALLOWED_ATTRS.setdefault("img", set()).update({"src", "alt", "title"})
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+@lru_cache(maxsize=1)
+def _embedded_font_css() -> str:
+    """Embed Inter so Vietnamese typography survives offline HTML export."""
+    font_dir = Path(__file__).resolve().parent.parent / "static" / "fonts"
+    faces = []
+    for filename, weight in (
+        ("Inter-Regular.woff2", 400),
+        ("Inter-Medium.woff2", 500),
+        ("Inter-SemiBold.woff2", 600),
+    ):
+        try:
+            encoded = base64.b64encode((font_dir / filename).read_bytes()).decode("ascii")
+        except OSError:
+            logger.warning("Visual report font missing: %s", font_dir / filename)
+            continue
+        faces.append(
+            "@font-face{"
+            "font-family:'Odysseus Inter';"
+            f"src:url(data:font/woff2;base64,{encoded}) format('woff2');"
+            f"font-weight:{weight};"
+            "font-style:normal;"
+            "font-display:swap"
+            "}"
+        )
+    return "\n".join(faces)
+
+
+def _report_language(*texts: str) -> str:
+    combined = " ".join(texts)
+    vietnamese_chars = (
+        "ăâđêôơưĂÂĐÊÔƠƯ"
+        "áàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệ"
+        "íìỉĩịóòỏõọốồổỗộớờởỡợ"
+        "úùủũụứừửữựýỳỷỹỵ"
+    )
+    return "vi" if any(char in combined for char in vietnamese_chars) else "en"
+
 
 def _autolink_urls(md_text: str) -> str:
     """Convert bare URLs to markdown links before processing.
@@ -222,7 +263,7 @@ def _inject_images(report_html: str, images: List[str]) -> Tuple[str, int]:
 
 _TEMPLATE = """\
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{lang_code}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -236,11 +277,12 @@ _TEMPLATE = """\
 <meta name="theme-color" content="#131214" media="(prefers-color-scheme: dark)">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='75' font-size='75'>O</text></svg>">
 <style>
+{font_face_css}
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
 :root {{
-  --font-display: 'Charter', 'Iowan Old Style', Georgia, serif;
-  --font-body: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-display: 'Odysseus Inter', 'Arial Unicode MS', 'Helvetica Neue', Arial, sans-serif;
+  --font-body: 'Odysseus Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Arial Unicode MS', Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   --bg: #fbf9f4;
   --bg-surface: #ffffff;
@@ -290,7 +332,7 @@ body {{
   color: var(--text);
   line-height: 1.75;
   font-size: 17px;
-  font-feature-settings: 'ss01', 'cv11';
+  font-feature-settings: 'kern', 'liga';
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
   position: relative;
@@ -342,10 +384,8 @@ body::after {{
   z-index: 100;
   display: flex;
   gap: 0.4rem;
-  opacity: 0.7;
-  transition: opacity 0.2s;
+  opacity: 1;
 }}
-.toolbar:hover {{ opacity: 1; }}
 .toolbar button {{
   display: inline-flex;
   align-items: center;
@@ -391,7 +431,7 @@ body::after {{
   border-radius: 8px;
   box-shadow: var(--shadow-md);
   overflow: hidden;
-  min-width: 140px;
+  min-width: 205px;
 }}
 .dropdown-menu.open {{ display: block; }}
 .dropdown-menu button {{
@@ -407,6 +447,11 @@ body::after {{
   cursor: pointer;
 }}
 .dropdown-menu button:hover {{ background: var(--bg-surface-alt); }}
+.dropdown-menu .menu-separator {{
+  height: 1px;
+  margin: 4px 0;
+  background: var(--border);
+}}
 
 /* ── Hero ──────────────────────────────────────────── */
 .hero {{
@@ -452,8 +497,7 @@ body::after {{
   font-family: var(--font-display);
   font-size: clamp(2rem, 4.5vw, 3rem);
   font-weight: 600;
-  font-variation-settings: 'opsz' 120, 'SOFT' 50;
-  line-height: 1.15;
+  line-height: 1.18;
   max-width: 720px;
   margin: 0 auto;
   letter-spacing: -0.02em;
@@ -643,7 +687,6 @@ body::after {{
   font-family: var(--font-display);
   font-size: clamp(1.55rem, 2.4vw, 1.85rem);
   font-weight: 600;
-  font-variation-settings: 'opsz' 96, 'SOFT' 50;
   margin: 3rem 0 1rem;
   padding-bottom: 0.55rem;
   border-bottom: 1px solid transparent;
@@ -657,7 +700,6 @@ body::after {{
   font-family: var(--font-display);
   font-size: 1.22rem;
   font-weight: 600;
-  font-variation-settings: 'opsz' 32;
   margin: 2.2rem 0 0.6rem;
   letter-spacing: -0.015em;
   color: var(--text);
@@ -679,7 +721,6 @@ body::after {{
 .content > h2:first-child + p::first-letter {{
   font-family: var(--font-display);
   font-weight: 700;
-  font-variation-settings: 'opsz' 144;
   font-size: 3.6em;
   line-height: 0.85;
   float: left;
@@ -820,19 +861,28 @@ body::after {{
 </head>
 <body class="{body_class}">
 
-<!-- Toolbar: Export + Restore hidden images -->
+<!-- Toolbar: Export, export-folder access, and hidden-image restore -->
 <div class="toolbar">
   {restore_btn_html}
+  <button id="btn-open-folder" type="button" title="Open the folder containing exported reports">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 2h11v10H3z"/><path d="M3 7V5h6l2 2"/></svg>
+    Open folder
+  </button>
   <div class="dropdown">
-    <button id="btn-export" title="Export">
+    <button id="btn-export" title="Export report">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      Export &#9662;
+      Export report &#9662;
     </button>
     <div class="dropdown-menu" id="export-menu">
-      <button id="btn-pdf">Save as PDF</button>
-      <button id="btn-html">Download HTML</button>
+      <button id="btn-pdf">Print / Save as PDF</button>
+      <button data-export-format="html">Export HTML</button>
+      <button data-export-format="markdown">Export Markdown</button>
+      <button data-export-format="json">Export JSON</button>
+      <div class="menu-separator"></div>
+      <button id="btn-open-folder-menu">Open export folder</button>
     </div>
   </div>
+  <span class="toast" id="toolbar-toast"></span>
 </div>
 
 <div class="hero">
@@ -899,14 +949,47 @@ body::after {{
     window.print();
   }});
 
-  // Download HTML
-  document.getElementById('btn-html').addEventListener('click', function() {{
-    exportMenu.classList.remove('open');
-    var blob = new Blob([document.documentElement.outerHTML], {{ type: 'text/html' }});
+  function showToolbarToast(message) {{
+    var toast = document.getElementById('toolbar-toast');
+    if (!toast) return;
+    toast.textContent = message;
+    toast.classList.add('show');
+    setTimeout(function() {{ toast.classList.remove('show'); }}, 2200);
+  }}
+
+  function downloadExport(format) {{
+    if (!__sessionId) return;
     var a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = document.title.replace(/[^a-z0-9]+/gi, '-').substring(0, 60) + '.html';
+    a.href = '/api/research/export/' + encodeURIComponent(__sessionId)
+      + '?format=' + encodeURIComponent(format);
+    document.body.appendChild(a);
     a.click();
+    a.remove();
+    showToolbarToast('Export saved to the reports folder');
+  }}
+
+  document.querySelectorAll('[data-export-format]').forEach(function(btn) {{
+    btn.addEventListener('click', function() {{
+      exportMenu.classList.remove('open');
+      downloadExport(btn.dataset.exportFormat);
+    }});
+  }});
+
+  function openExportFolder() {{
+    fetch('/api/research/open-export-folder', {{
+      method: 'POST',
+      credentials: 'same-origin',
+    }}).then(function(response) {{
+      if (!response.ok) throw new Error('open folder failed');
+      showToolbarToast('Opened the reports folder');
+    }}).catch(function() {{
+      showToolbarToast('Open folder is available in the desktop app');
+    }});
+  }}
+  document.getElementById('btn-open-folder').addEventListener('click', openExportFolder);
+  document.getElementById('btn-open-folder-menu').addEventListener('click', function() {{
+    exportMenu.classList.remove('open');
+    openExportFolder();
   }});
 
   // Per-image hide — fades the image out, then POSTs to the backend so
@@ -1212,40 +1295,12 @@ body.category-landscape {
   }
 }
 
-/* ── Per-category font pairings ───────────────────────
-   Body font shifts between serif (long-form categories) and sans
-   (practical/data categories) so each report reads as a different
-   publication, not just a re-tinted version of the same template. */
-
-/* Long-form: literary serif for both display and body */
-body:not([class*="category-"]),
-body.category-landscape {
-  --font-body: 'Source Serif 4', 'Iowan Old Style', Georgia, serif;
+/* Keep one embedded Unicode type family across categories. This avoids
+   Vietnamese diacritics falling back to a visibly different system font. */
+body[class], body:not([class]) {
+  --font-display: 'Odysseus Inter', 'Arial Unicode MS', 'Helvetica Neue', Arial, sans-serif;
+  --font-body: 'Odysseus Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Arial Unicode MS', Arial, sans-serif;
 }
-
-/* Comparison: analytical serif display + clean sans body */
-body.category-comparison {
-  --font-display: 'Playfair Display', Georgia, serif;
-  --font-body: 'Inter', system-ui, sans-serif;
-}
-
-/* How-to: friendly geometric sans, top to bottom */
-body.category-howto {
-  --font-display: 'Manrope', system-ui, sans-serif;
-  --font-body: 'Inter', system-ui, sans-serif;
-}
-
-/* Product: techy/engineery — IBM Plex Sans display + Inter body */
-body.category-product {
-  --font-display: 'IBM Plex Sans', system-ui, sans-serif;
-  --font-body: 'Inter', system-ui, sans-serif;
-}
-
-/* Source Serif sits visually larger than Inter at the same px — pull it
-   back one notch for the categories that use it as body so line length
-   and rhythm stay comparable across categories. */
-body:not([class*="category-"]) body, /* no-op selector, kept for clarity */
-body.category-landscape { font-size: 16.5px; }
 
 /* Drop cap looks bad on geometric sans — kill it for those categories */
 body.category-product   .content > p:first-of-type::first-letter,
@@ -1885,6 +1940,8 @@ def generate_visual_report(
 
     return _TEMPLATE.format(
         title=html.escape(title_text),
+        lang_code=_report_language(synthesized, report_markdown),
+        font_face_css=_embedded_font_css(),
         description=html.escape(desc_text),
         og_image_meta=og_image_meta,
         question_html=html.escape(synthesized),

@@ -3,19 +3,30 @@
 import asyncio
 import json
 import logging
+import os
 import re
+import shutil
+import subprocess
+import sys
+import unicodedata
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel, Field
 from src.endpoint_resolver import resolve_endpoint
 from src.auth_helpers import _auth_disabled, get_current_user
 
 _SESSION_ID_RE = re.compile(r"^[a-zA-Z0-9-]{1,128}$")
+_RESEARCH_DATA_DIR = Path("data/deep_research")
+_RESEARCH_EXPORT_DIR = _RESEARCH_DATA_DIR / "exports"
+_PROXY_FWD_HEADERS = (
+    "cf-connecting-ip", "cf-ray", "cf-visitor",
+    "x-forwarded-for", "x-forwarded-host", "x-real-ip", "forwarded",
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +46,43 @@ def _first_chat_model(models) -> str:
         if not any(p in str(m).lower() for p in _NON_CHAT_MODEL):
             return m
     return (models[0] if models else "")
+
+
+def _research_export_stem(query: str, session_id: str) -> str:
+    """Build a portable filename while retaining the report id for uniqueness."""
+    normalized = unicodedata.normalize("NFKD", query or "")
+    ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_text).strip("-").lower()
+    return f"{(slug[:72] or 'deep-research')}-{session_id}"
+
+
+def _is_direct_desktop_request(request: Request) -> bool:
+    if os.getenv("ODYSSEUS_DESKTOP", "0").strip().lower() not in {"1", "true", "yes", "on"}:
+        return False
+    host = request.client.host if request.client else None
+    if host not in {"127.0.0.1", "::1"}:
+        return False
+    return not any(request.headers.get(header) for header in _PROXY_FWD_HEADERS)
+
+
+def _open_folder(path: Path) -> None:
+    """Reveal a local folder without invoking a shell."""
+    if sys.platform == "darwin":
+        argv = ["open", str(path)]
+    elif os.name == "nt":
+        argv = ["explorer", str(path)]
+    else:
+        opener = shutil.which("xdg-open")
+        if not opener:
+            raise RuntimeError("No supported file manager opener is available")
+        argv = [opener, str(path)]
+    subprocess.Popen(
+        argv,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
 
 
 def _resolve_research_endpoint(sess) -> tuple:
@@ -188,6 +236,78 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
             logger.warning(f"No report data found for session {session_id}")
             raise HTTPException(404, "No visual report available for this session")
         return HTMLResponse(content=html_content)
+
+    @router.get("/api/research/export/{session_id}")
+    async def research_export(
+        session_id: str,
+        request: Request,
+        format: str = Query("html"),
+    ):
+        """Create a user-readable export and return it as a download."""
+        user = _require_user(request)
+        _validate_session_id(session_id)
+        _assert_owns_research(session_id, user)
+
+        json_path = _RESEARCH_DATA_DIR / f"{session_id}.json"
+        try:
+            data = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(500, f"Failed to read research: {exc}")
+
+        export_format = (format or "html").strip().lower()
+        stem = _research_export_stem(data.get("query", ""), session_id)
+        if export_format == "html":
+            content = research_handler.get_report_html(session_id)
+            if content is None:
+                raise HTTPException(404, "No visual report available for this session")
+            suffix = ".html"
+            media_type = "text/html; charset=utf-8"
+        elif export_format in {"markdown", "md"}:
+            content = data.get("raw_report") or data.get("result", "")
+            suffix = ".md"
+            media_type = "text/markdown; charset=utf-8"
+        elif export_format == "json":
+            content = json.dumps(
+                {
+                    "id": session_id,
+                    "query": data.get("query", ""),
+                    "report": data.get("raw_report") or data.get("result", ""),
+                    "sources": data.get("sources") or [],
+                    "stats": data.get("stats") or {},
+                    "category": data.get("category") or "",
+                    "started_at": data.get("started_at", 0),
+                    "completed_at": data.get("completed_at", 0),
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            suffix = ".json"
+            media_type = "application/json"
+        else:
+            raise HTTPException(400, "Unsupported export format")
+
+        _RESEARCH_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        export_path = _RESEARCH_EXPORT_DIR / f"{stem}{suffix}"
+        export_path.write_text(content, encoding="utf-8")
+        return FileResponse(
+            export_path,
+            media_type=media_type,
+            filename=export_path.name,
+        )
+
+    @router.post("/api/research/open-export-folder")
+    async def research_open_export_folder(request: Request):
+        """Open the local export directory in Finder/File Explorer."""
+        _require_user(request)
+        if not _is_direct_desktop_request(request):
+            raise HTTPException(403, "Opening local folders is only available in the desktop app")
+        _RESEARCH_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        try:
+            _open_folder(_RESEARCH_EXPORT_DIR.resolve())
+        except Exception as exc:
+            logger.warning("Failed to open research export folder: %s", exc)
+            raise HTTPException(500, "Could not open the research export folder")
+        return {"ok": True}
 
     class HideImageRequest(BaseModel):
         url: str

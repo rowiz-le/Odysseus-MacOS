@@ -13,7 +13,9 @@ import os
 import sys
 import types
 import asyncio
+import json
 import pytest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -175,6 +177,65 @@ def test_research_delete_rejects_anonymous():
     with pytest.raises(HTTPException) as exc:
         asyncio.run(target(session_id="x", request=_fake_request(user=None)))
     assert exc.value.status_code == 401
+
+
+def test_research_export_writes_utf8_markdown_to_exports_folder(tmp_path, monkeypatch):
+    from routes import research_routes
+
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data" / "deep_research"
+    data_dir.mkdir(parents=True)
+    (data_dir / "rp-vietnamese.json").write_text(
+        json.dumps(
+            {
+                "owner": "alice",
+                "query": "Nghiên cứu thị trường Việt Nam",
+                "raw_report": "# Báo cáo\n\nNội dung tiếng Việt đầy đủ dấu.",
+                "sources": [],
+                "stats": {},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(research_routes, "_RESEARCH_DATA_DIR", data_dir)
+    monkeypatch.setattr(research_routes, "_RESEARCH_EXPORT_DIR", data_dir / "exports")
+
+    router = research_routes.setup_research_routes(MagicMock())
+    target = next(
+        r.endpoint for r in router.routes
+        if getattr(r, "path", "") == "/api/research/export/{session_id}"
+    )
+    response = asyncio.run(
+        target(
+            session_id="rp-vietnamese",
+            request=_fake_request(user="alice"),
+            format="markdown",
+        )
+    )
+
+    exported = list((data_dir / "exports").glob("*.md"))
+    assert len(exported) == 1
+    assert exported[0].read_text(encoding="utf-8") == "# Báo cáo\n\nNội dung tiếng Việt đầy đủ dấu."
+    assert Path(response.path) == exported[0]
+
+
+def test_open_research_folder_requires_direct_desktop_request(monkeypatch):
+    from routes import research_routes
+
+    monkeypatch.setenv("ODYSSEUS_DESKTOP", "1")
+    direct = _fake_request(user="alice")
+    direct.headers = {}
+    assert research_routes._is_direct_desktop_request(direct) is True
+
+    proxied = _fake_request(user="alice")
+    proxied.headers = {"x-forwarded-for": "203.0.113.10"}
+    assert research_routes._is_direct_desktop_request(proxied) is False
+
+    remote = _fake_request(user="alice")
+    remote.headers = {}
+    remote.client.host = "203.0.113.10"
+    assert research_routes._is_direct_desktop_request(remote) is False
 
 
 # ---------------------------------------------------------------------------
