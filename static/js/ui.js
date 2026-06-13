@@ -1044,7 +1044,7 @@ export async function initCredits() {
   if (document.getElementById('odysseus-credits')) return;
 
   let versionText = 'v1.0';
-  let creditText = 'Remade by Rowiz';
+  let creditText = 'Original project by PewDiePie · Reimagined for macOS by Rowiz Lê';
 
   try {
     const response = await fetch('/api/version');

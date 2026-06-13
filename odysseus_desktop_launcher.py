@@ -29,6 +29,9 @@ PORT = int(os.environ.get("ODYSSEUS_DESKTOP_PORT", "7001"))
 HOST = "127.0.0.1"
 URL = f"http://{HOST}:{PORT}"
 APP_NAME = "Odysseus"
+APP_CREDIT_LINE = "Original project by PewDiePie"
+APP_REMAKE_LINE = "Reimagined for macOS by Rowiz Lê"
+APP_CREDITS = f"{APP_CREDIT_LINE}\n{APP_REMAKE_LINE}"
 _ABOUT_PANEL_CONTROLLER = None
 _LA_CONTEXT_CLASS = None
 _TOUCH_ID_POLICY = 1
@@ -85,6 +88,30 @@ def _configure_macos_app_metadata() -> Path | None:
         return None
 
 
+def _macos_about_credits(AppKit):
+    paragraph = AppKit.NSMutableParagraphStyle.alloc().init()
+    paragraph.setAlignment_(1)
+
+    attributes = {
+        AppKit.NSFontAttributeName: AppKit.NSFont.systemFontOfSize_(11.0),
+        AppKit.NSForegroundColorAttributeName: AppKit.NSColor.secondaryLabelColor(),
+        AppKit.NSParagraphStyleAttributeName: paragraph,
+    }
+    credits = AppKit.NSMutableAttributedString.alloc().initWithString_attributes_(
+        APP_CREDITS,
+        attributes,
+    )
+    emphasis = AppKit.NSFont.systemFontOfSize_weight_(11.0, 0.35)
+    for name in ("PewDiePie", "Rowiz Lê"):
+        start = APP_CREDITS.index(name)
+        credits.addAttribute_value_range_(
+            AppKit.NSFontAttributeName,
+            emphasis,
+            AppKit.NSMakeRange(start, len(name)),
+        )
+    return credits
+
+
 def _install_macos_about_panel(window) -> None:
     if sys.platform != "darwin" or window is None:
         return
@@ -117,6 +144,7 @@ def _install_macos_about_panel(window) -> None:
                 AppKit.NSAboutPanelOptionApplicationName: APP_NAME,
                 AppKit.NSAboutPanelOptionApplicationVersion: version,
                 AppKit.NSAboutPanelOptionVersion: "",
+                AppKit.NSAboutPanelOptionCredits: _macos_about_credits(AppKit),
             }
             if icon_path is not None:
                 icon = AppKit.NSImage.alloc().initByReferencingFile_(str(icon_path))

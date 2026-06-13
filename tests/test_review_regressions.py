@@ -27,6 +27,17 @@ def test_version_badge_uses_sidebar_layout_instead_of_covering_composer():
     assert "sidebar-brand-title" not in index_source
 
 
+def test_macos_about_panel_credits_original_and_remake_authors():
+    repo = Path(__file__).resolve().parent.parent
+    launcher_source = (repo / "odysseus_desktop_launcher.py").read_text(encoding="utf-8")
+    app_source = (repo / "app.py").read_text(encoding="utf-8")
+
+    assert 'APP_CREDIT_LINE = "Original project by PewDiePie"' in launcher_source
+    assert 'APP_REMAKE_LINE = "Reimagined for macOS by Rowiz Lê"' in launcher_source
+    assert "NSAboutPanelOptionCredits" in launcher_source
+    assert "Original project by PewDiePie · Reimagined for macOS by Rowiz Lê" in app_source
+
+
 class _FakeColumn:
     def __init__(self, name):
         self.name = name
