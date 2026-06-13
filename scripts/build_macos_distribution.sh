@@ -109,6 +109,8 @@ rsync -a --delete \
   --exclude '.macos-build/' \
   --exclude '.pytest_cache/' \
   --exclude '__pycache__/' \
+  --exclude 'src/cache/' \
+  --exclude 'docs/FIX_REPORT_*.md' \
   --exclude '*.pyc' \
   --exclude 'Deep-Live-Cam/' \
   --exclude 'Deep-Live-Cam.app/' \

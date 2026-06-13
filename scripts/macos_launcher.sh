@@ -85,6 +85,8 @@ rsync -a --delete \
   --exclude 'node_modules/' \
   --exclude 'dist/' \
   --exclude 'build/' \
+  --exclude 'src/cache/' \
+  --exclude 'docs/FIX_REPORT_*.md' \
   "$PAYLOAD_DIR"/ "$RUN_DIR"/
 
 cd "$RUN_DIR"
