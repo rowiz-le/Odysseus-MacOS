@@ -1059,24 +1059,17 @@ export async function initCredits() {
 
   const creditDiv = document.createElement('div');
   creditDiv.id = 'odysseus-credits';
-  creditDiv.innerHTML = `<span style="font-family: monospace;">Odysseus <span style="opacity: 0.6">${versionText}</span> | ${creditText}</span>`;
+  creditDiv.textContent = versionText;
+  creditDiv.title = `Odysseus ${versionText} | ${creditText}`;
+  creditDiv.setAttribute('aria-label', creditDiv.title);
 
-  creditDiv.style.cssText = `
-    position: fixed;
-    bottom: 10px;
-    right: 15px;
-    font-size: 11px;
-    color: var(--fg, #ccc);
-    opacity: 0.4;
-    transition: opacity 0.3s ease;
-    z-index: 1000;
-    pointer-events: auto;
-    cursor: default;
-  `;
-
-  creditDiv.addEventListener('mouseenter', () => { creditDiv.style.opacity = '0.8'; });
-  creditDiv.addEventListener('mouseleave', () => { creditDiv.style.opacity = '0.4'; });
-  document.body.appendChild(creditDiv);
+  const userBar = document.getElementById('sidebar-user-bar');
+  const userActions = userBar?.querySelector('.user-bar-actions');
+  if (userBar && userActions) {
+    userBar.insertBefore(creditDiv, userActions);
+  } else {
+    document.body.appendChild(creditDiv);
+  }
 }
 
 // Auto-init credits when the page loads
