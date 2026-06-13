@@ -219,11 +219,66 @@ def _map_hermes_event(event: Any, run_id: str, emitted_text: str = "") -> Iterab
     if not isinstance(event, dict):
         return []
 
-    etype = str(event.get("type") or event.get("object") or "")
+    etype = str(event.get("event") or event.get("type") or event.get("object") or "")
+
+    if etype in {"tool.started", "hermes.tool.started"}:
+        tool = event.get("tool") or event.get("tool_name") or event.get("name") or "hermes_tool"
+        command = event.get("preview") or event.get("command") or event.get("input") or event.get("arguments") or ""
+        if isinstance(command, (dict, list)):
+            command = json.dumps(command, ensure_ascii=False)
+        return [_sse({
+            "type": "tool_start",
+            "tool": tool,
+            "command": str(command or "")[:2000],
+        })]
+
+    if etype in {"tool.completed", "hermes.tool.completed", "tool.failed", "hermes.tool.failed"}:
+        tool = event.get("tool") or event.get("tool_name") or event.get("name") or "hermes_tool"
+        failed = bool(event.get("error")) or etype.endswith("failed")
+        duration = event.get("duration")
+        output = event.get("output") or event.get("result") or ""
+        if not output and duration is not None:
+            output = f"{'Failed' if failed else 'Completed'} in {duration}s"
+        elif not output:
+            output = "Hermes tool failed." if failed else "Hermes tool completed."
+        return [_sse({
+            "type": "tool_output",
+            "tool": tool,
+            "command": "",
+            "output": str(output),
+            "exit_code": 1 if failed else 0,
+        })]
+
+    # Hermes publishes the final answer both as message deltas and as a
+    # reasoning snapshot. The reasoning event is metadata, not another answer.
+    if etype in {"reasoning.available", "hermes.reasoning.available"}:
+        return []
+
+    if etype in {"response.completed", "run.completed"} or event.get("status") == "completed":
+        chunks = []
+        output = event.get("output")
+        if isinstance(output, str) and output:
+            delta = output
+            if emitted_text:
+                if delta == emitted_text or delta.strip() == emitted_text.strip():
+                    delta = ""
+                elif delta.startswith(emitted_text):
+                    delta = delta[len(emitted_text):]
+                elif emitted_text.strip() and delta.strip().startswith(emitted_text.strip()):
+                    delta = delta.strip()[len(emitted_text.strip()):]
+            if delta:
+                chunks.append(_sse({"delta": delta}))
+        chunks.append(_done())
+        return chunks
+
+    if etype in {"response.failed", "run.failed"} or event.get("status") == "failed":
+        msg = event.get("error") or event.get("message") or "Hermes run failed."
+        return [f"event: error\ndata: {json.dumps({'message': str(msg), 'run_id': run_id}, ensure_ascii=False)}\n\n", _done()]
+
     delta = _event_delta(event)
     is_snapshot = not isinstance(event.get("delta"), str)
     if delta and emitted_text and is_snapshot:
-        if delta == emitted_text:
+        if delta == emitted_text or delta.strip() == emitted_text.strip():
             delta = ""
         elif delta.startswith(emitted_text):
             delta = delta[len(emitted_text):]
@@ -238,7 +293,13 @@ def _map_hermes_event(event: Any, run_id: str, emitted_text: str = "") -> Iterab
     ):
         tool = event.get("tool") or event.get("name") or event.get("tool_name") or "hermes_tool"
         status = event.get("status") or event.get("phase") or ""
-        command = event.get("command") or event.get("input") or event.get("arguments") or status
+        command = (
+            event.get("preview")
+            or event.get("command")
+            or event.get("input")
+            or event.get("arguments")
+            or status
+        )
         if isinstance(command, (dict, list)):
             command = json.dumps(command, ensure_ascii=False)
         if status in {"end", "done", "completed", "success"} or event.get("output") is not None:
@@ -250,16 +311,6 @@ def _map_hermes_event(event: Any, run_id: str, emitted_text: str = "") -> Iterab
                 "exit_code": 0 if not event.get("error") else 1,
             })]
         return [_sse({"type": "tool_start", "tool": tool, "command": str(command or "")[:500]})]
-
-    if etype in {"response.completed", "run.completed"} or event.get("status") == "completed":
-        output = event.get("output")
-        if isinstance(output, str) and output:
-            return [_sse({"delta": output}), _done()]
-        return [_done()]
-
-    if etype in {"response.failed", "run.failed"} or event.get("status") == "failed":
-        msg = event.get("error") or event.get("message") or "Hermes run failed."
-        return [f"event: error\ndata: {json.dumps({'message': str(msg), 'run_id': run_id}, ensure_ascii=False)}\n\n", _done()]
 
     if event.get("status") in {"started", "running"}:
         return [_sse({"type": "agent_step", "round": 1, "message": f"Hermes {event.get('status')}"})]

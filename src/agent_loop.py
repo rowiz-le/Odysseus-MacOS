@@ -1518,6 +1518,34 @@ def _empty_response_fallback(
     return _error_msg, f'data: {json.dumps({"delta": _error_msg})}\n\n'
 
 
+_THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+_COMPLETION_CLAIM_RE = re.compile(
+    r"^\s*(?:#{1,6}\s*)?"
+    r"(?:xong(?:\s+rồi)?|đã\s+(?:xong|hoàn\s+(?:tất|thành))|"
+    r"done|completed|finished)\b",
+    re.IGNORECASE,
+)
+_CONTINUING_AFTER_DONE_RE = re.compile(
+    r"\b(?:tiếp\s+theo|giờ\s+(?:tôi|mình)\s+sẽ|"
+    r"now\s+i(?:'ll|\s+will)|next\s+i(?:'ll|\s+will)|let\s+me)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_completed_tool_round(text: str) -> bool:
+    """Whether a tool-using round already contains a credible final answer.
+
+    Models sometimes write a full "done" summary and then run one last cleanup
+    command. If that command succeeds, asking the model for another round only
+    leaves the UI on "Thinking" and risks a provider timeout after the work is
+    already complete.
+    """
+    cleaned = _THINK_RE.sub("", text or "").strip()
+    if len(cleaned) < 80 or not _COMPLETION_CLAIM_RE.search(cleaned):
+        return False
+    return not _CONTINUING_AFTER_DONE_RE.search(cleaned)
+
+
 async def stream_agent_loop(
     endpoint_url: str,
     model: str,
@@ -1806,13 +1834,14 @@ async def stream_agent_loop(
     _recent_call_sigs = collections.deque(maxlen=6)
     _stuck_rounds = 0
     _tool_type_counts: collections.Counter = collections.Counter()
-    _THINK_RE = re.compile(r'<think>.*?</think>', re.DOTALL | re.IGNORECASE)
     _force_answer = False  # set by loop-breaker → next round runs with NO tools
     # Supervisor: how many times we've nudged the model after it announced
     # an action without emitting the tool call. Capped to prevent a model
     # that *can't* call the tool from looping forever.
     _intent_nudge_count = 0
     _MAX_INTENT_NUDGES = 2
+    _empty_round_count = 0
+    _MAX_EMPTY_ROUND_RETRIES = 2
 
     # "I said I would, then didn't" detector. The pattern that breaks debug
     # loops on weak models (deepseek-v4-flash mid-2026): the model writes
@@ -1845,6 +1874,7 @@ async def stream_agent_loop(
         round_response = ""
         round_reasoning = ""  # reasoning_content deltas (DeepSeek-thinking, vLLM --reasoning-parser)
         native_tool_calls = []  # populated if model uses function calling
+        round_error_chunks = []
         # Reset doc streaming state per round
         _doc_acc = ""
         _doc_opened = False
@@ -1921,7 +1951,12 @@ async def stream_agent_loop(
                 break
             # Forward error events from stream_llm to the frontend
             if chunk.startswith("event: error"):
-                yield chunk
+                round_error_chunks.append(chunk)
+                # A transient pre-content error should not end the task or flash
+                # as a terminal UI error. The empty-round recovery below retries
+                # it; errors after real output remain visible.
+                if round_response or native_tool_calls:
+                    yield chunk
                 continue
             if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                 try:
@@ -2058,6 +2093,51 @@ async def stream_agent_loop(
             # Intercept [DONE] — don't forward until all rounds finish
 
         tool_blocks, used_native = _resolve_tool_blocks(round_response, native_tool_calls, round_num)
+
+        _visible_round = _THINK_RE.sub("", strip_tool_blocks(round_response)).strip()
+        if not tool_blocks and not _visible_round and not _force_answer:
+            _empty_round_count += 1
+            if _empty_round_count <= _MAX_EMPTY_ROUND_RETRIES and round_num < max_rounds:
+                reason = "provider error" if round_error_chunks else "empty model response"
+                logger.warning(
+                    "[agent] round %d ended with %s; retrying (%d/%d)",
+                    round_num,
+                    reason,
+                    _empty_round_count,
+                    _MAX_EMPTY_ROUND_RETRIES,
+                )
+                messages.append({
+                    "role": "system",
+                    "content": (
+                        "Your previous turn returned no usable response. The task is "
+                        "not complete merely because a provider request failed or "
+                        "returned empty. Continue from the existing tool results: "
+                        "make the next necessary tool call, or write the final answer "
+                        "if the work is genuinely finished."
+                    ),
+                })
+                yield f'data: {json.dumps({"type": "agent_step", "round": round_num + 1, "message": "Retrying empty agent round"})}\n\n'
+                continue
+
+            # Repeated empty rounds mean another normal tool-enabled request is
+            # unlikely to converge. Reuse the existing tool-free synthesis path
+            # so prior progress becomes a final answer instead of disappearing.
+            logger.warning(
+                "[agent] %d consecutive empty rounds; forcing a final synthesis",
+                _empty_round_count,
+            )
+            _force_answer = True
+            messages.append({
+                "role": "system",
+                "content": (
+                    "The provider repeatedly returned an empty response. Do not call "
+                    "more tools. Using the work and tool results already present, "
+                    "write a concise final status now. State clearly what completed "
+                    "and what, if anything, remains blocked."
+                ),
+            })
+        elif tool_blocks or _visible_round:
+            _empty_round_count = 0
 
         # Force-answer round: we told the model to STOP calling tools and
         # answer. If it ignored that and emitted a (possibly DSML) tool
@@ -2314,6 +2394,7 @@ async def stream_agent_loop(
         tool_results = []
         tool_result_texts = []  # plain text for native tool role messages
         budget_hit = False
+        _round_tools_succeeded = True
         for i, block in enumerate(tool_blocks):
             # --- Tool budget check ---
             if max_tool_calls > 0 and total_tool_calls >= max_tool_calls:
@@ -2368,6 +2449,13 @@ async def stream_agent_loop(
                     f'data: {json.dumps({"type": "tool_progress", "tool": block.tool_type, "round": round_num, **evt})}\n\n'
                 )
             desc, result = await _tool_task
+            _exit_code = result.get("exit_code")
+            if (
+                result.get("error")
+                or result.get("success") is False
+                or (_exit_code is not None and _exit_code != 0)
+            ):
+                _round_tools_succeeded = False
 
             # Extract structured web sources from web_search tool output.
             # web_search returns {"output": ..., "exit_code": 0}; check "output"
@@ -2545,6 +2633,14 @@ async def stream_agent_loop(
         _append_tool_results(messages, round_response, native_tool_calls,
                              tool_results, tool_result_texts, used_native, round_num,
                              round_reasoning=round_reasoning)
+
+        if _round_tools_succeeded and _looks_like_completed_tool_round(cleaned_round):
+            logger.info(
+                "[agent] round %d declared completion and its final tool(s) succeeded; "
+                "skipping redundant follow-up round",
+                round_num,
+            )
+            break
 
         # Emit agent_step event
         yield (

@@ -15,7 +15,11 @@ for mod in [
     if mod not in sys.modules:
         sys.modules[mod] = MagicMock()
 
-from src.agent_loop import _detect_admin_intent, _compute_final_metrics
+from src.agent_loop import (
+    _compute_final_metrics,
+    _detect_admin_intent,
+    _looks_like_completed_tool_round,
+)
 import src.agent_loop as agent_loop
 
 
@@ -240,6 +244,28 @@ class TestComputeFinalMetrics:
         m = _compute_final_metrics(**self._base_args(tool_events=[], round_texts=[]))
         assert "tool_events" not in m
         assert "round_texts" not in m
+
+
+class TestCompletedToolRound:
+    def test_accepts_final_vietnamese_summary(self):
+        text = (
+            "Xong rồi. Game đã chạy ổn định trong 9 giây, các file đã được "
+            "cập nhật và bước kiểm tra cuối cùng đã thành công."
+        )
+        assert _looks_like_completed_tool_round(text) is True
+
+    def test_accepts_final_english_summary(self):
+        text = (
+            "Done. The implementation is complete, the final verification "
+            "passed, and the requested files are now in place."
+        )
+        assert _looks_like_completed_tool_round(text) is True
+
+    def test_rejects_short_or_continuing_claim(self):
+        assert _looks_like_completed_tool_round("Xong rồi.") is False
+        assert _looks_like_completed_tool_round(
+            "Xong rồi phần đọc code. Giờ tôi sẽ sửa file và chạy toàn bộ kiểm tra tiếp theo."
+        ) is False
 
 
 # ---------------------------------------------------------------------------

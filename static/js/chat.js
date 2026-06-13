@@ -88,7 +88,8 @@ import createResearchSynapse from './researchSynapse.js';
 
   /** Check if an SSE reader is still actively connected for a session. */
   function hasActiveStream(sessionId) {
-    return _streamSessionId === sessionId || _backgroundStreams.has(sessionId);
+    const bg = _backgroundStreams.get(sessionId);
+    return _streamSessionId === sessionId || !!(bg && bg.status === 'running');
   }
 
   // Sources box builder and toggleSources are now in chatRenderer.js
@@ -512,6 +513,7 @@ import createResearchSynapse from './researchSynapse.js';
     let finalModelName = null;
     let spinner = null;
     let timedOut = false;
+    let sawDone = false;
     let processingProbeTimer = null;
     let processingProbeAbort = null;
     const clearProcessingProbe = () => {
@@ -1263,6 +1265,7 @@ import createResearchSynapse from './researchSynapse.js';
             }
 
             if (data === '[DONE]') {
+              sawDone = true;
               // Always update background map if entry exists (even if user switched back)
               var bgDone = _backgroundStreams.get(streamSessionId);
               if (bgDone) {
@@ -2010,7 +2013,10 @@ import createResearchSynapse from './researchSynapse.js';
                     currentToolBubble._elapsedTicker = null;
                   }
                   const ok = (json.exit_code === 0 || json.exit_code == null);
-                  const cmd = json.command || '';
+                  // Some runtimes (notably Hermes) only include the command on
+                  // tool_start. Preserve it when tool_output carries status only.
+                  const previousCmd = currentToolBubble.querySelector('.agent-thread-cmd')?.textContent || '';
+                  const cmd = json.command || previousCmd;
                   let outHtml = '';
                   if (json.output && json.output.trim()) {
                     outHtml = `<details class="agent-tool-output"><summary>Output</summary><pre>${esc(json.output)}</pre></details>`;
@@ -2229,6 +2235,10 @@ import createResearchSynapse from './researchSynapse.js';
             }
           }
         }
+      }
+
+      if (!sawDone) {
+        throw new Error('Stream closed before the completion event');
       }
 
       _renderStream();
@@ -2670,6 +2680,9 @@ import createResearchSynapse from './researchSynapse.js';
       }
     } finally {
       clearProcessingProbe();
+      if (_streamSessionId === streamSessionId) {
+        _streamSessionId = null;
+      }
       // Always clean up research tracking regardless of background state
       _researchingStreamIds.delete(streamSessionId);
       if (_researchingStreamIds.size === 0) {
@@ -2989,8 +3002,22 @@ import createResearchSynapse from './researchSynapse.js';
     var entry = _backgroundStreams.get(sessionId);
 
     if (entry.status === 'completed') {
-      // Response is already saved to DB and will appear in history — just clean up
+      // The session history was loaded before this completion check. Reload it
+      // once so the newly-persisted assistant response and tool timeline appear
+      // instead of leaving the old history with a stale processing indicator.
       _backgroundStreams.delete(sessionId);
+      if (sessionModule && sessionModule.clearStreaming) {
+        sessionModule.clearStreaming(sessionId);
+      }
+      setTimeout(function() {
+        if (
+          sessionModule.getCurrentSessionId
+          && sessionModule.getCurrentSessionId() === sessionId
+          && sessionModule.selectSession
+        ) {
+          sessionModule.selectSession(sessionId);
+        }
+      }, 0);
       return;
     }
 

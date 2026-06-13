@@ -89,7 +89,65 @@ def test_hermes_final_text_snapshots_are_not_streamed_twice():
     assert repeated_output == []
 
 
+def test_hermes_reasoning_and_completion_do_not_duplicate_final_answer():
+    delta = list(
+        hermes_bridge._map_hermes_event(
+            {"event": "message.delta", "delta": "\n\nDONE"},
+            "run-1",
+        )
+    )
+    reasoning = list(
+        hermes_bridge._map_hermes_event(
+            {"event": "reasoning.available", "text": "DONE"},
+            "run-1",
+            emitted_text="\n\nDONE",
+        )
+    )
+    completed = list(
+        hermes_bridge._map_hermes_event(
+            {"event": "run.completed", "output": "DONE"},
+            "run-1",
+            emitted_text="\n\nDONE",
+        )
+    )
+
+    assert delta == ['data: {"delta": "\\n\\nDONE"}\n\n']
+    assert reasoning == []
+    assert completed == ["data: [DONE]\n\n"]
+
+
+def test_hermes_tool_lifecycle_uses_event_field():
+    started = list(
+        hermes_bridge._map_hermes_event(
+            {
+                "event": "tool.started",
+                "tool": "terminal",
+                "preview": "printf HERMES_TOOL_TEST",
+            },
+            "run-1",
+        )
+    )
+    completed = list(
+        hermes_bridge._map_hermes_event(
+            {
+                "event": "tool.completed",
+                "tool": "terminal",
+                "duration": 0.42,
+                "error": False,
+            },
+            "run-1",
+        )
+    )
+
+    assert '"type": "tool_start"' in started[0]
+    assert '"command": "printf HERMES_TOOL_TEST"' in started[0]
+    assert '"type": "tool_output"' in completed[0]
+    assert '"output": "Completed in 0.42s"' in completed[0]
+    assert '"exit_code": 0' in completed[0]
+
+
 def test_chat_stream_surfaces_backend_message_field():
     source = Path("static/js/chat.js").read_text(encoding="utf-8")
     assert "const errMsg = json.message" in source
     assert "typeof json.error === 'string'" in source
+    assert "json.command || previousCmd" in source
