@@ -2346,7 +2346,6 @@ function initializeEventListeners() {
 
   // Selector map: key → CSS selector(s) for targets
   const UI_VIS_MAP = {
-    'sidebar-brand':       '#sidebar-brand-btn .logo-boat, .sidebar-brand-title',
     'sidebar-new-chat':    '#sidebar-new-chat-btn',
     'sidebar-search':      '#sidebar-search-btn',
     'sessions-section':    '#sessions-section',

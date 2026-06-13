@@ -16,12 +16,15 @@ from src.preset_manager import PresetManager
 def test_version_badge_uses_sidebar_layout_instead_of_covering_composer():
     repo = Path(__file__).resolve().parent.parent
     ui_source = (repo / "static/js/ui.js").read_text(encoding="utf-8")
+    index_source = (repo / "static/index.html").read_text(encoding="utf-8")
     css_source = (repo / "static/style.css").read_text(encoding="utf-8")
     credit_rule = css_source.split("#odysseus-credits {", 1)[1].split("}", 1)[0]
 
-    assert "userBar.insertBefore(creditDiv, userActions)" in ui_source
+    assert "userIdentity.appendChild(creditDiv)" in ui_source
     assert "position:" not in credit_rule
     assert "user-select: text" in credit_rule
+    assert 'class="welcome-boat" src="/static/icon-192.png"' in index_source
+    assert "sidebar-brand-title" not in index_source
 
 
 class _FakeColumn:

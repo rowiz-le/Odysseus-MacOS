@@ -1062,11 +1062,11 @@ export async function initCredits() {
   creditDiv.textContent = versionText;
   creditDiv.title = `Odysseus ${versionText} | ${creditText}`;
   creditDiv.setAttribute('aria-label', creditDiv.title);
+  creditDiv.addEventListener('click', (event) => event.stopPropagation());
 
-  const userBar = document.getElementById('sidebar-user-bar');
-  const userActions = userBar?.querySelector('.user-bar-actions');
-  if (userBar && userActions) {
-    userBar.insertBefore(creditDiv, userActions);
+  const userIdentity = document.querySelector('#user-bar-profile .user-bar-identity');
+  if (userIdentity) {
+    userIdentity.appendChild(creditDiv);
   } else {
     document.body.appendChild(creditDiv);
   }
