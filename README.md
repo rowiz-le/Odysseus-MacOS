@@ -51,7 +51,15 @@ chạy trên máy của bạn, với dữ liệu của bạn, ưu tiên local-fi
 
 ## Giao diện hiện tại
 
-Các ảnh dưới đây được chụp trực tiếp từ **Odysseus macOS v2026.06.14.5**.
+Toàn bộ ảnh và demo dưới đây được chụp trực tiếp từ **Odysseus macOS
+v2026.06.14.5**, không dùng ảnh AI hay giao diện mô phỏng. Tên chat, báo cáo và
+tài liệu cá nhân đã được làm mờ trước khi phát hành.
+
+### Tech demo
+
+![Odysseus macOS tech demo thực tế](docs/tech-demo.gif)
+
+[Xem bản MP4](docs/tech-demo.mp4) · [Xem bản WebM](docs/tech-demo.webm)
 
 ### Chat & Agent
 
@@ -70,6 +78,23 @@ model và cho phép chọn mức suy luận phù hợp.
 sinh trắc học qua Touch ID trên thiết bị tương thích.
 
 ![Tài khoản và bảo mật](docs/account-security-macos.jpg)
+
+### Khám phá workspace
+
+<table>
+  <tr>
+    <td width="50%"><strong>Deep Research</strong><br><img src="docs/research.gif" alt="Deep Research thực tế"></td>
+    <td width="50%"><strong>Model Compare</strong><br><img src="docs/compare.gif" alt="So sánh model thực tế"></td>
+  </tr>
+  <tr>
+    <td width="50%"><strong>Documents</strong><br><img src="docs/document.gif" alt="Thư viện tài liệu thực tế"></td>
+    <td width="50%"><strong>Notes</strong><br><img src="docs/notes.gif" alt="Ghi chú thực tế"></td>
+  </tr>
+  <tr>
+    <td width="50%"><strong>Gallery</strong><br><img src="docs/gallery.gif" alt="Thư viện ảnh thực tế"></td>
+    <td width="50%"><strong>Theme Studio</strong><br><img src="docs/theme.gif" alt="Tùy biến giao diện thực tế"></td>
+  </tr>
+</table>
 
 ## Quick Start
 
