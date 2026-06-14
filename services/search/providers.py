@@ -79,10 +79,11 @@ def _get_provider_key(provider: str) -> str:
 
 
 def _get_result_count() -> int:
-    """Return configured result count, default 5."""
+    """Return configured result count, clamped between 1 and 200, default 5."""
     settings = _get_search_settings()
     try:
-        return int(settings.get("search_result_count", 5))
+        val = int(settings.get("search_result_count", 5))
+        return max(1, min(val, 200))
     except (ValueError, TypeError):
         return 5
 

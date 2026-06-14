@@ -63,6 +63,62 @@ def test_all_search_engines_merge_and_deduplicate(monkeypatch):
     assert {item["search_provider"] for item in results} <= {"searxng", "duckduckgo"}
 
 
+def test_all_search_provider_dispatches_for_web_search(tmp_path, monkeypatch):
+    from services.search import core
+
+    monkeypatch.setattr(core, "_get_search_settings", lambda: {
+        "search_provider": "all",
+        "search_result_count": 3,
+    })
+    monkeypatch.setattr(core, "_get_provider_key", lambda provider: "")
+    monkeypatch.setattr(core, "SEARCH_CACHE_DIR", tmp_path)
+    core.search_cache_index.clear()
+
+    calls = []
+
+    def fake_all(query, count=10, time_filter=None):
+        calls.append((query, count, time_filter))
+        return [
+            {"title": "A", "url": "https://example.com/a", "snippet": "query", "search_provider": "searxng"},
+            {"title": "B", "url": "https://example.org/b", "snippet": "query", "search_provider": "duckduckgo"},
+        ]
+
+    monkeypatch.setattr(core, "search_all_providers", fake_all)
+    results = core.searxng_search_results("query", count=3)
+
+    assert calls == [("query", 3, None)]
+    assert {item["search_provider"] for item in results} == {"searxng", "duckduckgo"}
+    assert {item["url"] for item in results} == {"https://example.com/a", "https://example.org/b"}
+
+
+def test_comprehensive_web_search_uses_all_engines(monkeypatch):
+    from services.search import core
+
+    monkeypatch.setattr(core, "_get_search_settings", lambda: {
+        "search_provider": "all",
+        "search_result_count": 3,
+    })
+
+    def fake_all(query, count=10, time_filter=None):
+        return [
+            {"title": "A", "url": "https://example.com/a", "snippet": "query", "search_provider": "searxng"},
+            {"title": "B", "url": "https://example.org/b", "snippet": "query", "search_provider": "duckduckgo"},
+        ]
+
+    monkeypatch.setattr(core, "search_all_providers", fake_all)
+    monkeypatch.setattr(core, "fetch_webpage_content", lambda url, timeout, retry_attempt=0: {
+        "success": True,
+        "url": url,
+        "title": "Fetched",
+        "content": "query page content long enough",
+    })
+
+    text, sources = core.comprehensive_web_search("query", max_pages=1, return_sources=True)
+
+    assert "WEB SEARCH RESULTS" in text
+    assert {item["url"] for item in sources} == {"https://example.com/a", "https://example.org/b"}
+
+
 @pytest.mark.asyncio
 async def test_local_context_can_produce_fallback_report_without_web_queries():
     from src.deep_research import DeepResearcher

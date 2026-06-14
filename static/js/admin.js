@@ -735,6 +735,7 @@ function _wireContextEditors(epId, panel) {
 function initEndpointForm() {
   const provider = el('adm-epProvider');
   const urlInput = el('adm-epUrl');
+  const providerHelp = el('adm-epProviderHelp');
 
   // Custom provider picker — mirrors the (now hidden) <select id="adm-epProvider">
   // so the rest of this function (which reads provider.value and dispatches
@@ -761,9 +762,36 @@ function initEndpointForm() {
     pickerCurrent.querySelector('.adm-provider-logo').innerHTML = logo;
     pickerCurrent.querySelector('.adm-provider-name').textContent = opt.textContent;
   }
+  function _renderProviderHelp() {
+    if (!providerHelp) return;
+    const opt = provider.selectedOptions[0] || provider.options[0];
+    if (opt.dataset.help !== 'nvidia') {
+      providerHelp.innerHTML = '';
+      providerHelp.classList.add('hidden');
+      return;
+    }
+    providerHelp.innerHTML = `
+      <div class="adm-provider-help-head">
+        <span>NVIDIA NIM API</span>
+        <span class="adm-provider-help-badge">Free serverless API for development</span>
+      </div>
+      <ol class="adm-provider-help-steps">
+        <li>Open NVIDIA API Keys and sign in with an NVIDIA account.</li>
+        <li>Generate a key, then copy the value beginning with <code>nvapi-</code>.</li>
+        <li>Paste it below and click <strong>Add</strong>. Odysseus will import the available models.</li>
+      </ol>
+      <div class="adm-provider-help-links">
+        <a href="https://build.nvidia.com/settings/api-keys" target="_blank" rel="noopener noreferrer">Get API key</a>
+        <a href="https://build.nvidia.com/explore/discover" target="_blank" rel="noopener noreferrer">Browse models</a>
+        <a href="https://www.youtube.com/watch?v=0kK3WzKJdpc" target="_blank" rel="noopener noreferrer">Setup video</a>
+      </div>
+      <div class="adm-provider-help-note">The key is encrypted at rest in the local Odysseus database. NVIDIA's hosted API is intended for development and prototyping; account limits may apply.</div>`;
+    providerHelp.classList.remove('hidden');
+  }
   if (picker && pickerBtn && pickerMenu && pickerCurrent) {
     _renderPickerMenu();
     _syncPickerCurrent();
+    _renderProviderHelp();
     pickerBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       pickerMenu.classList.toggle('hidden');
@@ -785,6 +813,9 @@ function initEndpointForm() {
   provider.addEventListener('change', () => {
     if (provider.value) urlInput.value = provider.value;
     else urlInput.value = '';
+    _renderPickerMenu();
+    _syncPickerCurrent();
+    _renderProviderHelp();
   });
   function _normalizeBaseUrl(raw) {
     let u = raw.trim();
@@ -822,7 +853,17 @@ function initEndpointForm() {
     const rawUrl = (provider.value || urlInput.value).trim();
     const apiKey = el('adm-epApiKey').value.trim();
     if (!rawUrl) { msg.textContent = 'Select a provider or enter a base URL'; msg.className = 'admin-error'; return; }
-    if (provider.value && !apiKey) { msg.textContent = 'API key is required for cloud providers'; msg.className = 'admin-error'; return; }
+    const isOllamaCloud = /(^|\.)ollama\.com/i.test(rawUrl);
+    const isNvidia = /(^|\.)api\.nvidia\.com/i.test(rawUrl);
+    if (provider.value && !apiKey) {
+      msg.textContent = isOllamaCloud
+        ? 'Ollama API key is required for direct cloud access'
+        : isNvidia
+          ? 'NVIDIA API key is required. Generate one at build.nvidia.com/settings/api-keys.'
+          : 'API key is required for cloud providers';
+      msg.className = 'admin-error';
+      return;
+    }
     // Normalize URL (fix typos, add /v1, strip wrong paths)
     const url = provider.value ? rawUrl : _normalizeBaseUrl(rawUrl);
     const btn = el('adm-epAddBtn');
@@ -833,21 +874,30 @@ function initEndpointForm() {
       if (apiKey) fd.append('api_key', apiKey);
       const epType = el('adm-epType');
       if (epType) fd.append('model_type', epType.value);
-      fd.append('skip_probe', 'true');
+      if (provider.value) fd.append('endpoint_kind', 'api');
       const res = await fetch('/api/model-endpoints', { method: 'POST', body: fd, credentials: 'same-origin' });
       const d = await res.json();
       if (res.ok) {
         const count = d.models ? d.models.length : 0;
         urlInput.value = ''; urlInput.style.display = '';
         el('adm-epApiKey').value = ''; provider.value = '';
+        provider.dispatchEvent(new Event('change', { bubbles: true }));
         if (epType) epType.value = 'llm';
         if (d.id) _recentlyAddedEpId = String(d.id);
         loadEndpoints();
         if (!d.online) {
           msg.textContent = 'Added (endpoint offline — will retry on next load)';
           msg.className = 'admin-error';
+        } else if (!count) {
+          msg.textContent = isOllamaCloud
+            ? 'Connected, but no Ollama Cloud models were returned. Check the API key.'
+            : isNvidia
+              ? 'Connected to NVIDIA NIM, but no models were returned for this account.'
+              : 'Connected, but this provider returned no chat models.';
+          msg.className = 'admin-error';
         } else {
-          msg.innerHTML = `Added — found ${count} model${count !== 1 ? 's' : ''}. `
+          const providerName = isNvidia ? 'NVIDIA NIM' : (isOllamaCloud ? 'Ollama Cloud' : 'provider');
+          msg.innerHTML = `Added ${providerName} — found ${count} model${count !== 1 ? 's' : ''}. `
             + `<a href="#" id="adm-probe-now" style="text-decoration:underline;cursor:pointer;">Probe models?</a>`;
           msg.className = 'admin-success';
           const probeLink = el('adm-probe-now');
@@ -902,7 +952,6 @@ function initEndpointForm() {
         fd.append('base_url', url);
         const lt = el('adm-epLocalType');
         if (lt) fd.append('model_type', lt.value);
-        fd.append('skip_probe', 'true');
         const res = await fetch('/api/model-endpoints', { method: 'POST', body: fd, credentials: 'same-origin' });
         const d = await res.json();
         if (res.ok) {
@@ -960,7 +1009,6 @@ function initEndpointForm() {
             const base = item.url.replace('/chat/completions', '').replace(/\/$/, '');
             const fd = new FormData();
             fd.append('base_url', base);
-            fd.append('skip_probe', 'true');
             const r = await fetch('/api/model-endpoints', { method: 'POST', body: fd });
             if (r.ok) {
               added++;

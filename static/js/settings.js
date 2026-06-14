@@ -984,6 +984,7 @@ async function initSttSettings() {
    ═══════════════════════════════════════════ */
 
 var _searchProviderHints = {
+  all: 'Query every configured provider in parallel, merge unique URLs, and rank the strongest results. Key-only engines are skipped until configured.',
   searxng: 'Self-hosted SearXNG instance. Leave URL empty to use the SEARXNG_INSTANCE env var.',
   duckduckgo: 'Free search — no API key required. Works out of the box.',
   brave: 'Get your API key from brave.com/search/api',
@@ -1006,12 +1007,14 @@ var _searchKeyFields = {
 async function initSearchSettings() {
   var provSel = el('set-searchProvider');
   var countSel = el('set-searchResultCount');
+  var countWarning = el('set-searchResultWarning');
   var urlInput = el('set-searchUrl');
   var urlRow = el('set-searchUrlRow');
   var keyInput = el('set-searchApiKey');
   var keyRow = el('set-searchKeyRow');
   var cxInput = el('set-searchCx');
   var cxRow = el('set-searchCxRow');
+  var fbRow = el('set-searchFallbackRow');
   var hint = el('set-searchHint');
   var msg = el('set-searchMsg');
   var _settings = {};
@@ -1028,6 +1031,9 @@ async function initSearchSettings() {
     urlRow.style.display = prov === 'searxng' ? 'flex' : 'none';
     keyRow.style.display = _searchNeedsKey[prov] ? 'flex' : 'none';
     cxRow.style.display = prov === 'google_pse' ? 'flex' : 'none';
+    if (fbRow) fbRow.style.display = (prov === 'all' || prov === 'disabled') ? 'none' : 'flex';
+    var cval = parseInt(countSel.value, 10) || 5;
+    if (countWarning) countWarning.classList.toggle('hidden', cval <= 50);
     hint.textContent = _searchProviderHints[prov] || '';
     if (prov === 'brave') keyInput.placeholder = 'Brave API key';
     else if (prov === 'google_pse') keyInput.placeholder = 'Google API key';
@@ -1096,6 +1102,7 @@ async function initSearchSettings() {
 
   provSel.addEventListener('change', function() { updateVisibility(); saveSearch(); _syncSearchPicker(); });
   countSel.addEventListener('change', saveSearch);
+  countSel.addEventListener('input', updateVisibility);
   urlInput.addEventListener('change', saveSearch);
   keyInput.addEventListener('change', saveSearch);
   cxInput.addEventListener('change', saveSearch);
@@ -1154,14 +1161,15 @@ async function initSearchSettings() {
   function _availableFallbackOptions() {
     var primary = provSel.value;
     var chain = _settings.search_fallback_chain || [];
-    var inChain = new Set(chain.concat([primary, 'disabled']));
+    var inChain = new Set(chain.concat([primary, 'disabled', 'all']));
     return Array.from(provSel.options)
       .map(function(o) { return { value: o.value, label: o.textContent, logo: o.dataset.searchLogo }; })
       .filter(function(o) { return !inChain.has(o.value); });
   }
   function _renderFallbackChain() {
     if (!fbWrap) return;
-    var chain = (_settings.search_fallback_chain || []).slice();
+    var chain = (_settings.search_fallback_chain || [])
+      .filter(function(p) { return p && p !== 'disabled' && p !== 'all' && p !== provSel.value; });
     var esc = function(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); };
     var chipsHtml = chain.map(function(p, i) {
       var label = _searchLabels[p] || p;
@@ -1283,6 +1291,7 @@ async function initSearchSettings() {
 
 // SVG logos for each search provider (16×16 viewBox normalised to 24×24).
 var _SEARCH_PROVIDER_LOGOS = {
+  all:       '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3l1.8 4.8L19 6l-1.8 5.2L22 13l-4.8 1.8L19 20l-5.2-1.8L12 23l-1.8-4.8L5 20l1.8-5.2L2 13l4.8-1.8L5 6l5.2 1.8L12 3zm0 6.2A3.8 3.8 0 1 0 12 16.8 3.8 3.8 0 0 0 12 9.2z"/></svg>',
   searxng:   '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 4a6 6 0 1 0 0 12 6 6 0 0 0 0-12zm0-2a8 8 0 1 1-4.93 14.32l-3.4 3.4a1 1 0 1 1-1.4-1.4l3.4-3.4A8 8 0 0 1 10 2zM13 8.5L11.5 10 13 11.5l-1 1L10.5 11 9 12.5l-1-1L9.5 10 8 8.5l1-1L10.5 9 12 7.5z"/></svg>',
   duckduckgo:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm-1.5 5.5a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4zm5 0a1.2 1.2 0 1 1 0 2.4 1.2 1.2 0 0 1 0-2.4zM12 13c-1.5 0-3.6.8-3.6 2.5C8.4 17.2 10.4 18 12 18s3.6-.8 3.6-2.5C15.6 13.8 13.5 13 12 13z"/></svg>',
   brave:     '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 4l-1.5 1L15 3l-3 .5L9 3 6.5 5 5 4 3 7l1.5 2L4 12l3 5 4 3 1 1 1-1 4-3 3-5-.5-3L21 7l-2-3zM12 17l-2.5-2 .5-3-2-1.5 2-1.5L11 7l3-1 3 1-.5 2 2 1.5-2 1.5.5 3L14.5 17 12 17z"/></svg>',

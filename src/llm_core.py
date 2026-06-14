@@ -10,7 +10,7 @@ from fastapi import HTTPException
 from typing import Optional, Dict, List
 from src.model_context import get_context_length, DEFAULT_CONTEXT
 from src.reasoning import apply_reasoning_guidance, api_reasoning_effort
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
 
 logger = logging.getLogger(__name__)
 
@@ -181,18 +181,25 @@ def _ollama_api_root(url: str) -> str:
     url = (url or "").strip().rstrip("/")
     parsed = urlparse(url)
     path = (parsed.path or "").rstrip("/")
-    if path.endswith("/api/chat"):
-        return url[: -len("/chat")]
-    if path.endswith("/api/tags"):
-        return url[: -len("/tags")]
-    if path.endswith("/api/generate"):
-        return url[: -len("/generate")]
+    for suffix in (
+        "/api/chat",
+        "/api/tags",
+        "/api/generate",
+        "/v1/chat/completions",
+        "/v1/models",
+        "/chat/completions",
+        "/models",
+        "/v1",
+    ):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)].rstrip("/")
+            break
     if path.endswith("/api"):
-        return url
-    if _host_match(url, "ollama.com"):
-        root = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "https://ollama.com"
-        return root.rstrip("/") + "/api"
-    return url
+        return urlunparse(parsed._replace(path=path, params="", query="", fragment="")).rstrip("/")
+    root = urlunparse(parsed._replace(path=path, params="", query="", fragment="")).rstrip("/")
+    if not root and _host_match(url, "ollama.com"):
+        root = "https://ollama.com"
+    return root.rstrip("/") + "/api"
 
 
 def _normalize_ollama_url(url: str) -> str:
@@ -312,7 +319,8 @@ def _detect_provider(url: str) -> str:
     Unknown hosts fall back to the OpenAI-compatible default, which the
     majority of providers implement.
     """
-    if _is_ollama_native_url(url):
+    parsed = urlparse(url)
+    if _is_ollama_native_url(url) or parsed.port == 11434:
         return "ollama"
     if _host_match(url, "anthropic.com"):
         return "anthropic"
@@ -349,6 +357,7 @@ def _provider_label(url: str) -> str:
     if not url:
         return "provider"
     if _host_match(url, "anthropic.com"): return "Anthropic"
+    if _host_match(url, "api.nvidia.com"): return "NVIDIA NIM"
     if _host_match(url, "ollama.com"): return "Ollama Cloud"
     if _host_match(url, "x.ai"): return "xAI"
     if _host_match(url, "openai.com"): return "OpenAI"
@@ -370,8 +379,8 @@ def _provider_label(url: str) -> str:
         return "local endpoint"
     return host or "provider"
 
-
-def _format_upstream_error(status: int, body: bytes | str, url: str) -> str:
+from typing import Union
+def _format_upstream_error(status: int, body: Union[bytes, str], url: str) -> str:
     """Turn an upstream HTTP error into a user-readable sentence.
 
     Auth failures (401/403) become 'xAI rejected the API key' etc., so the UI

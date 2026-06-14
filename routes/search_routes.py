@@ -8,7 +8,7 @@ from fastapi import APIRouter, Request
 import time
 
 from services.search import get_search_config, comprehensive_web_search, PROVIDER_INFO
-from services.search.core import _call_provider
+from services.search.core import _call_provider, search_all_providers
 from services.search.providers import _get_provider_key, _get_search_instance
 
 logger = logging.getLogger(__name__)
@@ -100,7 +100,12 @@ def setup_search_routes(config) -> APIRouter:
             return {"results": [], "provider": provider, "error": "Unknown provider"}
         t0 = time.time()
         try:
-            results = _call_provider(provider, query, min(count, 20))
+            limit = min(count, 20)
+            results = (
+                search_all_providers(query, limit)
+                if provider == "all"
+                else _call_provider(provider, query, limit)
+            )
             elapsed = round(time.time() - t0, 2)
             return {"results": results, "provider": provider, "time": elapsed}
         except Exception as e:

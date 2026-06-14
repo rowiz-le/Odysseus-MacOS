@@ -1651,6 +1651,7 @@
                   <div class="adm-provider-menu hidden" id="search-provider-menu"></div>
                 </div>
                 <select id="set-searchProvider" class="settings-select" style="display:none;">
+                  <option value="all" data-search-logo="all">All available engines</option>
                   <option value="searxng" data-search-logo="searxng">SearXNG (self-hosted)</option>
                   <option value="duckduckgo" data-search-logo="duckduckgo">DuckDuckGo (free, no key)</option>
                   <option value="brave" data-search-logo="brave">Brave Search</option>
@@ -1661,14 +1662,14 @@
                 </select>
                 <button type="button" class="admin-btn-sm" id="set-searchTestBtn" title="Run a test query against the configured provider" style="margin-left:6px;flex-shrink:0;position:relative;top:2px;">Test</button>
               </div>
-              <div class="settings-row">
-                <label class="settings-label">Results</label>
-                <select id="set-searchResultCount" class="settings-select">
-                  <option value="3">3</option>
-                  <option value="5" selected>5</option>
-                  <option value="10">10</option>
-                  <option value="20">20</option>
-                </select>
+              <div class="settings-row" style="align-items: flex-start;">
+                <label class="settings-label" style="margin-top: 6px;">Results</label>
+                <div style="flex:1">
+                  <input id="set-searchResultCount" type="number" min="1" max="200" class="settings-select" style="width:80px;" value="5">
+                  <div id="set-searchResultWarning" class="adm-provider-help hidden" style="color: var(--orange); margin-top: 6px;">
+                    Setting results &gt; 50 may be slow, consume excessive quota, or cause provider rate-limits.
+                  </div>
+                </div>
               </div>
               <div id="set-searchUrlRow" class="settings-row">
                 <label class="settings-label">URL</label>
@@ -1682,7 +1683,7 @@
                 <label class="settings-label">CX ID</label>
                 <input id="set-searchCx" type="text" placeholder="Google PSE engine ID" class="settings-select">
               </div>
-              <div class="settings-row">
+              <div id="set-searchFallbackRow" class="settings-row">
                 <label class="settings-label" title="Providers tried in order when the primary fails or hits a rate limit">Fallbacks</label>
                 <div class="search-fallback-chain" id="set-searchFallbackChain"></div>
               </div>
@@ -2124,7 +2125,9 @@
                 </div>
                 <select id="adm-epProvider" style="display:none">
                   <option value="">Custom URL</option>
+                  <option value="https://integrate.api.nvidia.com/v1" data-logo="nvidia" data-help="nvidia">NVIDIA NIM</option>
                   <option value="https://api.anthropic.com" data-logo="anthropic">Anthropic</option>
+                  <option value="https://ollama.com/api" data-logo="ollama">Ollama Cloud</option>
                   <option value="https://api.deepseek.com/v1" data-logo="deepseek">DeepSeek</option>
                   <option value="https://api.openai.com/v1" data-logo="openai">OpenAI</option>
                   <option value="https://openrouter.ai/api/v1" data-logo="openrouter">OpenRouter</option>
@@ -2136,6 +2139,7 @@
                   <option value="https://api.x.ai/v1" data-logo="grok">xAI Grok</option>
                   <option value="https://api.z.ai/api/paas/v4" data-logo="zhipu">Z.AI (Zhipu)</option>
                 </select>
+                <div id="adm-epProviderHelp" class="adm-provider-help hidden"></div>
                 <div class="admin-model-form-row">
                   <input id="adm-epUrl" type="text" placeholder="Base URL (e.g. https://api.example.com/v1)" style="flex:1">
                 </div>

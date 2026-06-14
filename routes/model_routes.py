@@ -30,7 +30,7 @@ from src.endpoint_resolver import (
     build_headers,
 )
 from src.auth_helpers import _auth_disabled, owner_filter
-from src.model_catalog import fetch_lm_studio_catalog, parse_standard_model_catalog
+from src.model_catalog import fetch_lm_studio_catalog, fetch_ollama_catalog, parse_standard_model_catalog
 from src.model_context import (
     clear_context_cache,
     describe_context_window,
@@ -366,7 +366,7 @@ def _curate_models(model_ids, provider):
     return curated, extra
 
 
-def _truthy(value: str | None) -> bool:
+def _truthy(value: Optional[str]) -> bool:
     return (value or "").strip().lower() in ("true", "1", "yes", "on")
 
 
@@ -395,7 +395,7 @@ def _endpoint_kind(ep: Any) -> str:
     return _normalize_endpoint_kind(getattr(ep, "endpoint_kind", None))
 
 
-def _endpoint_refresh_mode(ep: Any, endpoint_kind: str | None = None) -> str:
+def _endpoint_refresh_mode(ep: Any, endpoint_kind: Optional[str] = None) -> str:
     return _normalize_refresh_mode(getattr(ep, "model_refresh_mode", None), endpoint_kind or _endpoint_kind(ep))
 
 
@@ -541,6 +541,37 @@ def _is_ollama_base(base_url: str) -> bool:
         return parsed.port == 11434 or "ollama" in host
     except Exception:
         return "ollama" in (base_url or "").lower()
+
+
+def _is_ollama_cloud_base(base_url: str) -> bool:
+    try:
+        host = (urlparse(base_url).hostname or "").lower()
+        return host == "ollama.com" or host.endswith(".ollama.com")
+    except Exception:
+        return False
+
+
+def _ollama_env_api_key() -> str:
+    return (os.getenv("OLLAMA_API_KEY") or os.getenv("OLLAMA_CLOUD_API_KEY") or "").strip()
+
+
+def _is_nvidia_nim_base(base_url: str) -> bool:
+    try:
+        host = (urlparse(base_url).hostname or "").lower()
+        return host == "integrate.api.nvidia.com"
+    except Exception:
+        return False
+
+
+def _effective_provider_api_key(base_url: str, api_key: str = "") -> str:
+    key = (api_key or "").strip()
+    if key:
+        return key
+    if _is_ollama_cloud_base(base_url):
+        return _ollama_env_api_key()
+    if _is_nvidia_nim_base(base_url):
+        return (os.getenv("NVIDIA_API_KEY") or "").strip()
+    return ""
 
 
 # Prefixes/substrings for models that are NOT chat-completions-capable
@@ -729,11 +760,12 @@ def _probe_endpoint_standard(base_url: str, api_key: str = None, timeout: int = 
         # Ollama format: {"models": [{"name": "model-name"}]}
         if not models:
             models = [m.get("name") or m.get("model") for m in (data.get("models") or []) if m.get("name") or m.get("model")]
+
         if models:
             # Z.AI coding plan omits some working models from /models;
             # append curated-only entries for that endpoint only.
             if _host_match(base, "z.ai") and "/api/coding" in (urlparse(base).path or ""):
-                _ck = _match_provider_curated(base, None)
+                _ck = _match_provider_curated(base, _detect_provider(base))
                 for _e in _PROVIDER_CURATED.get(_ck, []):
                     if _e not in set(models) and not any(m.startswith(_e) for m in models):
                         models.append(_e)
@@ -755,7 +787,11 @@ def _probe_endpoint_standard(base_url: str, api_key: str = None, timeout: int = 
     try:
         parsed = urlparse(base)
         if parsed.port == 11434 or "ollama" in (parsed.hostname or "").lower():
-            root = base[:-3].rstrip("/") if base.endswith("/v1") else base
+            root = base
+            for suffix in ("/v1", "/api"):
+                if root.endswith(suffix):
+                    root = root[: -len(suffix)].rstrip("/")
+                    break
             r = _httpx_get(root + "/api/tags", timeout=timeout, verify=llm_verify())
             r.raise_for_status()
             data = r.json()
@@ -765,9 +801,9 @@ def _probe_endpoint_standard(base_url: str, api_key: str = None, timeout: int = 
     except Exception as e:
         logger.debug(f"Ollama /api/tags probe failed for {base}: {e}")
     # Fall back to curated list if the provider has a URL-based match (e.g. z.ai has no /models endpoint)
-    curated_key = _match_provider_curated(base, None)
+    curated_key = _match_provider_curated(base, _detect_provider(base))
     fallback = _PROVIDER_CURATED.get(curated_key) if curated_key else None
-    if fallback:
+    if fallback and curated_key != "ollama":
         logger.info(f"Using curated fallback for {curated_key}: {fallback}")
         return list(fallback)
     return []
@@ -780,6 +816,9 @@ def _probe_endpoint_catalog(
 ) -> tuple[List[str], Dict[str, Dict[str, Any]]]:
     """Probe IDs plus rich metadata when the server exposes it."""
     catalog = fetch_lm_studio_catalog(base_url, api_key, timeout=timeout)
+    if catalog is not None:
+        return catalog
+    catalog = fetch_ollama_catalog(base_url, api_key, timeout=timeout)
     if catalog is not None:
         return catalog
     from src.endpoint_resolver import resolve_url
@@ -852,7 +891,12 @@ def _ping_endpoint(base_url: str, api_key: str = None, timeout: float = 1.5) -> 
                     break
             for path in ("/api/version", "/api/tags"):
                 try:
-                    r = _httpx_get(root + path, timeout=timeout, verify=llm_verify())
+                    r = _httpx_get(
+                        root + path,
+                        headers=headers,
+                        timeout=timeout,
+                        verify=llm_verify(),
+                    )
                     result = _result_from_response(r)
                     if result["reachable"]:
                         return result
@@ -884,10 +928,22 @@ def _model_endpoint_error_message(base_url: str, ping: Dict[str, Any] = None) ->
         parts = ["No Ollama models found for that endpoint."]
         if error:
             parts.append(f"Last probe error: {error}.")
-        parts.append("Check that Ollama is running and that the base URL is correct.")
-        parts.append("For native/local installs, use http://localhost:11434/v1.")
-        parts.append("For Docker, use http://host.docker.internal:11434/v1 when Ollama runs on the host.")
-        parts.append("Run `ollama list` to confirm at least one model is installed.")
+        if _is_ollama_cloud_base(base_url):
+            parts.append("Use https://ollama.com/api and provide a valid Ollama API key.")
+            parts.append("You can enter the key in the app or set OLLAMA_API_KEY.")
+        else:
+            parts.append("Check that Ollama is running and that the base URL is correct.")
+            parts.append("For native/local installs, use http://localhost:11434/v1.")
+            parts.append("For Docker, use http://host.docker.internal:11434/v1 when Ollama runs on the host.")
+            parts.append("Run `ollama list`; if empty, pull a model such as `ollama pull llama3.2`.")
+        return " ".join(parts)
+
+    if _is_nvidia_nim_base(base_url):
+        parts = ["No NVIDIA NIM models were returned for that API key."]
+        if error:
+            parts.append(f"Last probe error: {error}.")
+        parts.append("Generate or review the key at https://build.nvidia.com/settings/api-keys.")
+        parts.append("You can enter it in the app or set NVIDIA_API_KEY.")
         return " ".join(parts)
 
     if error:
@@ -1210,7 +1266,7 @@ def setup_model_routes(model_discovery):
         return {"hosts": [], "items": items}
 
     def _refresh_lm_studio_now(owner: str = "", is_admin: bool = False) -> bool:
-        """Synchronize LM Studio's native catalog before serving a forced refresh."""
+        """Synchronize native local catalogs before serving a forced refresh."""
         db = SessionLocal()
         changed = False
         try:
@@ -1218,11 +1274,11 @@ def setup_model_routes(model_discovery):
             if owner and not is_admin:
                 q = owner_filter(q, ModelEndpoint, owner)
             for ep in q.all():
-                catalog = fetch_lm_studio_catalog(
-                    _normalize_base(ep.base_url),
-                    ep.api_key,
-                    timeout=min(_endpoint_refresh_timeout(ep, "local"), 3),
-                )
+                base = _normalize_base(ep.base_url)
+                timeout = min(_endpoint_refresh_timeout(ep, "local"), 3)
+                catalog = fetch_lm_studio_catalog(base, ep.api_key, timeout=timeout)
+                if catalog is None:
+                    catalog = fetch_ollama_catalog(base, ep.api_key, timeout=timeout)
                 if catalog is None:
                     continue
                 model_ids, metadata = catalog
@@ -1615,6 +1671,7 @@ def setup_model_routes(model_discovery):
         # server. Cookbook local serves are launched inside Odysseus itself, so
         # keep those container-local when the frontend marks them as such.
         base_url = _rewrite_loopback_for_docker(base_url, container_local=_truthy(container_local))
+        api_key_value = _effective_provider_api_key(base_url, api_key)
 
         # Auto-generate name from URL if not provided
         if not name.strip():
@@ -1670,13 +1727,13 @@ def setup_model_routes(model_discovery):
                 if refresh_timeout is not None:
                     existing.model_refresh_timeout = refresh_timeout
                     changed = True
-                if api_key.strip() and not existing.api_key:
-                    existing.api_key = api_key.strip()
+                if api_key_value and not existing.api_key:
+                    existing.api_key = api_key_value
                     changed = True
                 if should_probe:
                     probed_models, probed_metadata = _probe_endpoint_catalog(
                         base_url,
-                        (api_key.strip() or existing.api_key or None),
+                        (api_key_value or existing.api_key or None),
                         timeout=_explicit_model_list_timeout(base_url, existing_kind_for_probe, refresh_timeout),
                     )
                     if probed_models:
@@ -1710,12 +1767,12 @@ def setup_model_routes(model_discovery):
             _db_dedup.close()
 
         model_ids, model_metadata = (
-            _probe_endpoint_catalog(base_url, api_key.strip() or None, timeout=explicit_timeout)
+            _probe_endpoint_catalog(base_url, api_key_value or None, timeout=explicit_timeout)
             if should_probe else ([], {})
         )
         ping = {"reachable": False, "error": None}
         if (should_probe or requested_kind in ("api", "proxy")) and not model_ids:
-            ping = _ping_endpoint(base_url, api_key.strip() or None, timeout=min(explicit_timeout, 2.0))
+            ping = _ping_endpoint(base_url, api_key_value or None, timeout=min(explicit_timeout, 2.0))
         if require_model_list and not model_ids:
             raise HTTPException(400, _model_endpoint_error_message(base_url, ping))
 
@@ -1736,7 +1793,7 @@ def setup_model_routes(model_discovery):
                 id=ep_id,
                 name=name.strip(),
                 base_url=base_url,
-                api_key=api_key.strip() or None,
+                api_key=api_key_value or None,
                 is_enabled=True,
                 model_type=model_type.strip() if model_type else "llm",
                 endpoint_kind=requested_kind,
@@ -1796,10 +1853,11 @@ def setup_model_routes(model_discovery):
         base_url = resolve_url(base_url)
         base_url = _rewrite_loopback_for_docker(base_url)
         requested_kind = _normalize_endpoint_kind(endpoint_kind)
+        api_key_value = _effective_provider_api_key(base_url, api_key)
         configured_timeout = _parse_positive_int(model_refresh_timeout, minimum=1, maximum=60)
         probe_timeout = _explicit_model_list_timeout(base_url, requested_kind, configured_timeout)
-        models, metadata = _probe_endpoint_catalog(base_url, api_key.strip() or None, timeout=probe_timeout)
-        ping = {"reachable": True, "error": None} if models else _ping_endpoint(base_url, api_key.strip() or None, timeout=min(probe_timeout, 2.0))
+        models, metadata = _probe_endpoint_catalog(base_url, api_key_value or None, timeout=probe_timeout)
+        ping = {"reachable": True, "error": None} if models else _ping_endpoint(base_url, api_key_value or None, timeout=min(probe_timeout, 2.0))
         return {
             "base_url": base_url,
             "online": bool(models) or bool(ping.get("reachable")),

@@ -18,8 +18,9 @@ logger = logging.getLogger(__name__)
 # (every chat, every preprocess); without this it re-parses the JSON each call.
 # Picks up edits within _CACHE_TTL seconds, which is fine for human-edited config.
 _CACHE_TTL = 2.0
-_settings_cache: tuple[float, dict] | None = None
-_features_cache: tuple[float, dict] | None = None
+from typing import Optional
+_settings_cache: Optional[tuple[float, dict]] = None
+_features_cache: Optional[tuple[float, dict]] = None
 
 def _invalidate_caches():
     global _settings_cache, _features_cache

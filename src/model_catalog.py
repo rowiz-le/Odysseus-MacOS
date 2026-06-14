@@ -29,6 +29,39 @@ def _server_root(base_url: str) -> str:
     return urlunparse(parsed._replace(path=path, params="", query="", fragment="")).rstrip("/")
 
 
+def _ollama_api_root(base_url: str) -> Optional[str]:
+    parsed = urlparse((base_url or "").strip())
+    if not parsed.scheme or not parsed.netloc:
+        return None
+    host = (parsed.hostname or "").lower()
+    path = (parsed.path or "").rstrip("/")
+    looks_ollama = (
+        parsed.port == 11434
+        or host == "ollama.com"
+        or host.endswith(".ollama.com")
+        or "ollama" in host
+    )
+    if not looks_ollama:
+        return None
+    for suffix in (
+        "/api/chat",
+        "/api/tags",
+        "/api/generate",
+        "/v1/chat/completions",
+        "/v1/models",
+        "/chat/completions",
+        "/models",
+        "/v1",
+    ):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)].rstrip("/")
+            break
+    if path.endswith("/api"):
+        return urlunparse(parsed._replace(path=path, params="", query="", fragment="")).rstrip("/")
+    root = urlunparse(parsed._replace(path=path, params="", query="", fragment="")).rstrip("/")
+    return root.rstrip("/") + "/api"
+
+
 def _positive_int(value: Any) -> Optional[int]:
     try:
         number = int(value)
@@ -103,6 +136,47 @@ def parse_lm_studio_catalog(data: Any) -> Optional[Tuple[list[str], Dict[str, Di
         reasoning = _reasoning_metadata(capabilities)
         if reasoning:
             item["reasoning"] = reasoning
+
+        model_ids.append(model_id)
+        metadata[model_id] = item
+
+    return model_ids, metadata
+
+
+def parse_ollama_catalog(data: Any) -> Optional[Tuple[list[str], Dict[str, Dict[str, Any]]]]:
+    """Parse Ollama's native ``GET /api/tags`` response.
+
+    A valid Ollama server may return an empty ``models`` list, so ``([], {})``
+    means reachable-but-empty, while ``None`` means "not an Ollama catalog".
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("models"), list):
+        return None
+
+    model_ids: list[str] = []
+    metadata: Dict[str, Dict[str, Any]] = {}
+    for raw in data["models"]:
+        if not isinstance(raw, dict):
+            continue
+        model_id = str(raw.get("name") or raw.get("model") or raw.get("id") or "").strip()
+        if not model_id:
+            continue
+        details = raw.get("details") if isinstance(raw.get("details"), dict) else {}
+        item: Dict[str, Any] = {
+            "id": model_id,
+            "display_name": model_id,
+            "provider": "ollama",
+        }
+        for key in ("modified_at", "digest"):
+            if raw.get(key):
+                item[key] = raw.get(key)
+        size = _positive_int(raw.get("size"))
+        if size:
+            item["size"] = size
+        for key in ("family", "format", "parameter_size", "quantization_level"):
+            if details.get(key):
+                item[key] = str(details.get(key))
+        if ":cloud" in model_id.lower() or raw.get("cloud"):
+            item["cloud"] = True
 
         model_ids.append(model_id)
         metadata[model_id] = item
@@ -199,6 +273,28 @@ def fetch_lm_studio_catalog(
         if not response.is_success:
             return None
         return parse_lm_studio_catalog(response.json())
+    except Exception:
+        return None
+
+
+def fetch_ollama_catalog(
+    base_url: str,
+    api_key: Optional[str] = None,
+    *,
+    timeout: float = 3.0,
+) -> Optional[Tuple[list[str], Dict[str, Dict[str, Any]]]]:
+    """Return normalized Ollama models, or None for non-Ollama endpoints."""
+    root = _ollama_api_root(base_url)
+    if not root:
+        return None
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    try:
+        response = httpx.get(f"{root}/tags", headers=headers, timeout=timeout)
+        if not response.is_success:
+            return None
+        return parse_ollama_catalog(response.json())
     except Exception:
         return None
 

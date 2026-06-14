@@ -13419,6 +13419,58 @@ body:has(.doc-version-panel:not(.hidden)) .hamburger-btn {
 }
 .adm-provider-item:hover { background: color-mix(in srgb, var(--fg) 8%, transparent); }
 .adm-provider-item.active { background: color-mix(in srgb, var(--accent, var(--red)) 14%, transparent); }
+.adm-provider-help {
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, #76b900 38%, var(--border));
+  border-radius: 7px;
+  background:
+    linear-gradient(135deg, color-mix(in srgb, #76b900 11%, transparent), transparent 62%),
+    color-mix(in srgb, var(--fg) 3%, var(--bg));
+  color: color-mix(in srgb, var(--fg) 78%, transparent);
+  font-size: 11px;
+  line-height: 1.45;
+}
+.adm-provider-help.hidden { display: none; }
+.adm-provider-help-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--fg);
+  font-weight: 650;
+  margin-bottom: 5px;
+}
+.adm-provider-help-badge {
+  margin-left: auto;
+  padding: 2px 6px;
+  border: 1px solid color-mix(in srgb, #76b900 55%, transparent);
+  border-radius: 999px;
+  color: color-mix(in srgb, #76b900 78%, var(--fg));
+  background: color-mix(in srgb, #76b900 9%, transparent);
+  font-size: 9px;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+.adm-provider-help-steps {
+  margin: 0 0 7px 17px;
+  padding: 0;
+}
+.adm-provider-help-links {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.adm-provider-help a {
+  color: color-mix(in srgb, #76b900 72%, var(--fg));
+  text-decoration: none;
+  font-weight: 600;
+}
+.adm-provider-help a:hover { text-decoration: underline; }
+.adm-provider-help-note {
+  margin-top: 6px;
+  opacity: 0.72;
+}
 
 /* When the Appearance tab is open, the #settings-modal-opacity slider (in
    the header) fades the modal so the user can see the rest of the UI react

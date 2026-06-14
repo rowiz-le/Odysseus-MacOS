@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional
 from urllib.parse import urlparse
 
+from src.model_catalog import fetch_ollama_catalog
+
 logger = logging.getLogger(__name__)
 
 # Cache for discovered hosts
@@ -165,20 +167,45 @@ class ModelDiscovery:
     def _check_port(self, host: str, port: int) -> Optional[Dict[str, Any]]:
         """Check a single host:port for models."""
         base = f"http://{host}:{port}/v1"
-        try:
-            r = httpx.get(f"{base}/models", timeout=3)
-            if not r.is_success:
-                return None
-            data = r.json() or {}
-            ids = [m.get("id") for m in (data.get("data") or []) if m.get("id")]
-            if ids:
+        if port == 11434:
+            catalog = fetch_ollama_catalog(base, timeout=2.5)
+            if catalog is not None:
+                ids, _ = catalog
                 return {
                     "host": host,
                     "port": port,
                     "url": f"http://{host}:{port}{self.openai_compat_path}",
                     "models": ids,
                     "models_display": [i.lstrip("/") for i in ids],
-                    "provider": self._fingerprint_provider(host, port),
+                    "provider": "ollama",
+                }
+        try:
+            r = httpx.get(f"{base}/models", timeout=3)
+            ids = []
+            is_ollama = False
+            if r.is_success:
+                data = r.json() or {}
+                ids = [m.get("id") for m in (data.get("data") or []) if m.get("id")]
+
+            # If no models found via OpenAI API, check if it's Ollama native API
+            if not ids:
+                try:
+                    r2 = httpx.get(f"http://{host}:{port}/api/tags", timeout=1.5)
+                    if r2.is_success and "models" in (r2.json() or {}):
+                        is_ollama = True
+                        data2 = r2.json() or {}
+                        ids = [m.get("name") or m.get("model") for m in (data2.get("models") or []) if m.get("name") or m.get("model")]
+                except Exception:
+                    pass
+
+            if ids or is_ollama:
+                return {
+                    "host": host,
+                    "port": port,
+                    "url": f"http://{host}:{port}{self.openai_compat_path}",
+                    "models": ids,
+                    "models_display": [i.lstrip("/") for i in ids],
+                    "provider": "ollama" if is_ollama else self._fingerprint_provider(host, port),
                 }
         except Exception:
             pass
@@ -208,6 +235,20 @@ class ModelDiscovery:
                     if key not in seen_models:
                         seen_models.add(key)
                         items.append(result)
+
+        ollama_key = (os.getenv("OLLAMA_API_KEY") or os.getenv("OLLAMA_CLOUD_API_KEY") or "").strip()
+        if ollama_key:
+            catalog = fetch_ollama_catalog("https://ollama.com/api", ollama_key, timeout=10)
+            if catalog is not None:
+                ids, _ = catalog
+                items.append({
+                    "host": "ollama.com",
+                    "port": 443,
+                    "url": "https://ollama.com/api",
+                    "models": ids,
+                    "models_display": [i.lstrip("/") for i in ids],
+                    "provider": "ollama",
+                })
 
         # Sort by host then port for consistent ordering
         items.sort(key=lambda x: (x["host"], x["port"]))

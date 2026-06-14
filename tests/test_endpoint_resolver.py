@@ -88,6 +88,16 @@ class TestBuildChatUrl:
     def test_local_endpoint(self):
         assert build_chat_url("http://localhost:8000/v1") == "http://localhost:8000/v1/chat/completions"
 
+    def test_real_ollama_v1_base_uses_native_api(self):
+        resolver = _load_real_endpoint_resolver()
+        assert resolver.build_chat_url("http://localhost:11434/v1") == "http://localhost:11434/api/chat"
+        assert resolver.build_models_url("http://localhost:11434/v1") == "http://localhost:11434/api/tags"
+
+    def test_real_ollama_cloud_v1_base_uses_native_api(self):
+        resolver = _load_real_endpoint_resolver()
+        assert resolver.build_chat_url("https://ollama.com/v1") == "https://ollama.com/api/chat"
+        assert resolver.build_models_url("https://ollama.com/v1") == "https://ollama.com/api/tags"
+
 
 class TestBuildHeaders:
     def test_no_key(self):

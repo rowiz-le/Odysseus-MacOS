@@ -24,13 +24,43 @@ from routes.model_routes import (
     _curate_models,
     _is_chat_model,
     _classify_endpoint,
+    _effective_provider_api_key,
+    _is_nvidia_nim_base,
+    _model_endpoint_error_message,
     _parse_context_window_override,
     _probe_endpoint,
     _unhide_catalog_models,
     _truthy,
     _PROVIDER_CURATED,
 )
-from src.llm_core import ANTHROPIC_MODELS
+from src.llm_core import ANTHROPIC_MODELS, _provider_label
+
+
+class TestNvidiaNimProvider:
+    def test_detects_official_nim_endpoint(self):
+        assert _is_nvidia_nim_base("https://integrate.api.nvidia.com/v1") is True
+        assert _is_nvidia_nim_base("https://api.openai.com/v1") is False
+
+    def test_uses_environment_key_when_form_key_is_empty(self, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-test")
+        assert _effective_provider_api_key(
+            "https://integrate.api.nvidia.com/v1",
+            "",
+        ) == "nvapi-test"
+
+    def test_explicit_key_overrides_environment_key(self, monkeypatch):
+        monkeypatch.setenv("NVIDIA_API_KEY", "nvapi-env")
+        assert _effective_provider_api_key(
+            "https://integrate.api.nvidia.com/v1",
+            "nvapi-form",
+        ) == "nvapi-form"
+
+    def test_provider_label_and_probe_error_are_specific(self):
+        base_url = "https://integrate.api.nvidia.com/v1"
+        assert _provider_label(base_url) == "NVIDIA NIM"
+        message = _model_endpoint_error_message(base_url, {"error": "HTTP 401"})
+        assert "NVIDIA NIM" in message
+        assert "NVIDIA_API_KEY" in message
 
 
 # ── _match_provider_curated ──

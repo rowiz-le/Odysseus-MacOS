@@ -151,16 +151,29 @@ def _anthropic_api_root(base: str) -> str:
 
 
 def _ollama_api_root(base: str) -> str:
-    """Return the native Ollama API root, adding /api for ollama.com hosts."""
+    """Return the native Ollama API root such as http://localhost:11434/api."""
     base = (base or "").strip().rstrip("/")
     parsed = urlparse(base)
     path = (parsed.path or "").rstrip("/")
+    for suffix in (
+        "/api/chat",
+        "/api/tags",
+        "/api/generate",
+        "/v1/chat/completions",
+        "/v1/models",
+        "/chat/completions",
+        "/models",
+        "/v1",
+    ):
+        if path.endswith(suffix):
+            path = path[: -len(suffix)].rstrip("/")
+            break
     if path.endswith("/api"):
-        return base
-    if _host_match(base, "ollama.com"):
-        root = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else "https://ollama.com"
-        return root.rstrip("/") + "/api"
-    return base
+        return urlunparse(parsed._replace(path=path, params="", query="", fragment="")).rstrip("/")
+    root = urlunparse(parsed._replace(path=path, params="", query="", fragment="")).rstrip("/")
+    if not root and _host_match(base, "ollama.com"):
+        root = "https://ollama.com"
+    return root.rstrip("/") + "/api"
 
 
 def build_chat_url(base: str) -> str:

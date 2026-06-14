@@ -1074,36 +1074,143 @@ async def _startup_event():
     # Auto-detect local Ollama instance — run in background to avoid blocking startup
     async def _detect_ollama():
         try:
-            import shutil
+            import json
             import uuid
-            if not shutil.which("ollama"):
-                return
             import httpx
+            from src.model_catalog import parse_ollama_catalog
+            catalogs = []
             async with httpx.AsyncClient() as client:
-                r = await client.get("http://localhost:11434/v1/models", timeout=3)
-                if r.status_code != 200:
-                    return
+                try:
+                    response = await client.get("http://localhost:11434/api/tags", timeout=3)
+                    if response.is_success:
+                        catalog = parse_ollama_catalog(response.json())
+                        if catalog is not None:
+                            catalogs.append((
+                                "Ollama (local)",
+                                "http://localhost:11434/v1",
+                                None,
+                                catalog,
+                            ))
+                except Exception:
+                    pass
+
+                cloud_key = (
+                    os.getenv("OLLAMA_API_KEY")
+                    or os.getenv("OLLAMA_CLOUD_API_KEY")
+                    or ""
+                ).strip()
+                if cloud_key:
+                    try:
+                        response = await client.get(
+                            "https://ollama.com/api/tags",
+                            headers={"Authorization": f"Bearer {cloud_key}"},
+                            timeout=10,
+                        )
+                        if response.is_success:
+                            catalog = parse_ollama_catalog(response.json())
+                            if catalog is not None:
+                                catalogs.append((
+                                    "Ollama Cloud",
+                                    "https://ollama.com/api",
+                                    cloud_key,
+                                    catalog,
+                                ))
+                    except Exception:
+                        pass
+            if not catalogs:
+                return
             from core.database import SessionLocal, ModelEndpoint
             db = SessionLocal()
             try:
-                existing = db.query(ModelEndpoint).filter(
-                    ModelEndpoint.base_url == "http://localhost:11434/v1"
-                ).first()
-                if not existing:
-                    ep = ModelEndpoint(
-                        id=str(uuid.uuid4())[:8],
-                        name="Ollama (local)",
-                        base_url="http://localhost:11434/v1",
-                        is_enabled=True,
-                    )
-                    db.add(ep)
-                    db.commit()
-                    logger.info("Auto-added Ollama endpoint (localhost:11434)")
+                for name, base_url, api_key, catalog in catalogs:
+                    model_ids, metadata = catalog
+                    existing = db.query(ModelEndpoint).filter(
+                        ModelEndpoint.base_url == base_url
+                    ).first()
+                    if existing:
+                        existing.name = existing.name or name
+                        existing.is_enabled = True
+                        existing.cached_models = json.dumps(model_ids)
+                        existing.model_metadata = json.dumps(metadata) if metadata else None
+                        if api_key and not existing.api_key:
+                            existing.api_key = api_key
+                    else:
+                        db.add(ModelEndpoint(
+                            id=str(uuid.uuid4())[:8],
+                            name=name,
+                            base_url=base_url,
+                            api_key=api_key,
+                            is_enabled=True,
+                            cached_models=json.dumps(model_ids),
+                            model_metadata=json.dumps(metadata) if metadata else None,
+                        ))
+                    logger.info("Auto-added/refreshed %s (%d models)", name, len(model_ids))
+                db.commit()
             finally:
                 db.close()
         except Exception as e:
             logger.debug(f"Ollama auto-detect: {e}")
     _startup_tasks.append(asyncio.create_task(_detect_ollama()))
+
+    # Preconfigure NVIDIA NIM when a deployment-level key is present. The
+    # hosted API is OpenAI-compatible, so the regular endpoint runtime handles
+    # chat once the catalog and encrypted key are stored.
+    async def _detect_nvidia_nim():
+        api_key = (os.getenv("NVIDIA_API_KEY") or "").strip()
+        if not api_key:
+            return
+        try:
+            import json
+            import uuid
+            import httpx
+            base_url = "https://integrate.api.nvidia.com/v1"
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    f"{base_url}/models",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    timeout=15,
+                )
+                if not response.is_success:
+                    logger.warning("NVIDIA NIM catalog refresh failed with HTTP %s", response.status_code)
+                    return
+                data = response.json()
+                models = [
+                    item.get("id")
+                    for item in (data.get("data") or [])
+                    if isinstance(item, dict) and item.get("id")
+                ]
+            if not models:
+                logger.warning("NVIDIA NIM catalog refresh returned no models")
+                return
+            from core.database import SessionLocal, ModelEndpoint
+            db = SessionLocal()
+            try:
+                existing = db.query(ModelEndpoint).filter(
+                    ModelEndpoint.base_url == base_url
+                ).first()
+                if existing:
+                    existing.name = existing.name or "NVIDIA NIM"
+                    existing.api_key = api_key
+                    existing.is_enabled = True
+                    existing.endpoint_kind = "api"
+                    existing.cached_models = json.dumps(models)
+                else:
+                    db.add(ModelEndpoint(
+                        id=str(uuid.uuid4())[:8],
+                        name="NVIDIA NIM",
+                        base_url=base_url,
+                        api_key=api_key,
+                        is_enabled=True,
+                        endpoint_kind="api",
+                        cached_models=json.dumps(models),
+                    ))
+                db.commit()
+                logger.info("Auto-added/refreshed NVIDIA NIM endpoint (%d models)", len(models))
+            finally:
+                db.close()
+        except Exception as e:
+            logger.debug("NVIDIA NIM auto-configure: %s", e)
+    _startup_tasks.append(asyncio.create_task(_detect_nvidia_nim()))
 
     # Auto-detect LM Studio's OpenAI-compatible local server. This keeps the
     # desktop app useful out of the box for users who already run LM Studio.

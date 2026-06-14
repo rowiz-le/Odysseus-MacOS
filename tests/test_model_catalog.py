@@ -1,6 +1,10 @@
+import src.model_catalog as model_catalog
+
 from src.model_catalog import (
+    fetch_ollama_catalog,
     find_model_metadata,
     parse_lm_studio_catalog,
+    parse_ollama_catalog,
     parse_standard_model_catalog,
 )
 
@@ -104,3 +108,60 @@ def test_standard_catalog_reads_nested_limits():
 
 def test_non_lm_studio_schema_is_rejected():
     assert parse_lm_studio_catalog({"data": [{"id": "gpt-4o"}]}) is None
+
+
+def test_ollama_catalog_preserves_native_metadata_and_cloud_flag():
+    model_ids, metadata = parse_ollama_catalog({
+        "models": [
+            {
+                "name": "llama3.2:latest",
+                "size": 2019393189,
+                "details": {
+                    "family": "llama",
+                    "format": "gguf",
+                    "parameter_size": "3.2B",
+                    "quantization_level": "Q4_K_M",
+                },
+            },
+            {
+                "model": "gpt-oss:cloud",
+                "cloud": True,
+            },
+        ],
+    })
+
+    assert model_ids == ["llama3.2:latest", "gpt-oss:cloud"]
+    assert metadata["llama3.2:latest"]["family"] == "llama"
+    assert metadata["llama3.2:latest"]["quantization_level"] == "Q4_K_M"
+    assert metadata["gpt-oss:cloud"]["cloud"] is True
+
+
+def test_empty_ollama_catalog_is_reachable_but_empty():
+    assert parse_ollama_catalog({"models": []}) == ([], {})
+
+
+def test_fetch_ollama_cloud_catalog_uses_native_tags_and_bearer(monkeypatch):
+    seen = {}
+
+    class Response:
+        is_success = True
+
+        @staticmethod
+        def json():
+            return {"models": [{"name": "gpt-oss:cloud"}]}
+
+    def fake_get(url, headers=None, timeout=None):
+        seen.update(url=url, headers=headers, timeout=timeout)
+        return Response()
+
+    monkeypatch.setattr(model_catalog.httpx, "get", fake_get)
+    model_ids, _ = fetch_ollama_catalog(
+        "https://ollama.com/v1",
+        "ollama-test-key",
+        timeout=7,
+    )
+
+    assert model_ids == ["gpt-oss:cloud"]
+    assert seen["url"] == "https://ollama.com/api/tags"
+    assert seen["headers"]["Authorization"] == "Bearer ollama-test-key"
+    assert seen["timeout"] == 7

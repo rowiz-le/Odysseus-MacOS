@@ -275,8 +275,9 @@ CONTEXT_METADATA_FIELDS = (
     "input_token_limit",
 )
 
+from typing import Optional
 
-def clear_context_cache(endpoint_url: str | None = None, model: str | None = None) -> None:
+def clear_context_cache(endpoint_url: Optional[str] = None, model: Optional[str] = None) -> None:
     """Clear cached context-window lookups after model metadata changes."""
     if endpoint_url is None and model is None:
         _context_cache.clear()

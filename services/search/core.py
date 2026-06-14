@@ -97,6 +97,8 @@ def _call_provider(provider_name: str, query: str, count: int, time_filter: str 
     """Call a search provider by name. Returns list of results or empty list."""
     if provider_name == "google":
         provider_name = "google_pse"
+    if provider_name == "all":
+        return search_all_providers(query, count, time_filter)
     if provider_name == "searxng":
         return searxng_search_api(query, count, time_filter=time_filter)
     elif provider_name == "brave":
@@ -171,6 +173,8 @@ _FALLBACK_ORDER = ["duckduckgo"]
 
 def _build_provider_chain(primary: str) -> List[str]:
     """Build ordered list: primary first, then configured/default fallbacks."""
+    if primary == "all":
+        return ["all"]
     chain = [primary]
     settings = _get_search_settings()
     user_chain = settings.get("search_fallback_chain") or []
@@ -178,7 +182,7 @@ def _build_provider_chain(primary: str) -> List[str]:
         user_chain = [s.strip() for s in user_chain.split(",") if s.strip()]
     fallbacks = user_chain if user_chain else _FALLBACK_ORDER
     for fb in fallbacks:
-        if fb and fb != primary and fb not in chain and fb != "disabled":
+        if fb and fb != primary and fb not in chain and fb not in ("disabled", "all"):
             chain.append(fb)
     return chain
 
@@ -195,7 +199,7 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
     if count == 10:
         count = result_count
 
-    cache_key = generate_cache_key(f"{query}|{count}|{time_filter}")
+    cache_key = generate_cache_key(f"{search_provider}|{query}|{count}|{time_filter}")
     cache_file = SEARCH_CACHE_DIR / f"{cache_key}.cache"
 
     # Check cache
@@ -228,7 +232,8 @@ def searxng_search_results(query: str, count: int = 10, time_filter: str = None)
 
     results: List[dict] = []
     for provider_name in provider_chain:
-        for attempt in range(2):
+        attempts = 1 if provider_name == "all" else 2
+        for attempt in range(attempts):
             try:
                 logger.info(f"Attempting {provider_name} search (attempt {attempt + 1})")
                 results = _call_provider(provider_name, query, count, time_filter)
@@ -284,7 +289,9 @@ def invalidate_search_cache(query: Optional[str] = None) -> None:
         # Match the key the write path stores: searxng_search_results replaces
         # the caller's default count with the configured _get_result_count()
         # (default 5), so a hardcoded "|10|None" never matched a real entry.
-        cache_key = generate_cache_key(f"{query}|{_get_result_count()}|None")
+        settings = _get_search_settings()
+        provider = settings.get("search_provider", "searxng")
+        cache_key = generate_cache_key(f"{provider}|{query}|{_get_result_count()}|None")
         cache_file = SEARCH_CACHE_DIR / f"{cache_key}.cache"
         if cache_file.exists():
             try:
@@ -336,7 +343,8 @@ def comprehensive_web_search(
     for provider_name in provider_chain:
         last_err = None
         empty = False
-        for attempt in range(2):
+        attempts = 1 if provider_name == "all" else 2
+        for attempt in range(attempts):
             try:
                 search_results = _call_provider(provider_name, query, fetch_count, time_filter)
                 if search_results:

@@ -235,8 +235,12 @@ Key settings:
 |---|---|---|
 | `LLM_HOST` | `localhost` | Your LLM server (e.g. `llm-host.local:8000`) |
 | `LLM_HOSTS` | -- | Comma-separated list for model discovery |
+| `OLLAMA_BASE_URL` | -- | Optional local/remote Ollama server to include in discovery |
+| `OLLAMA_API_KEY` | -- | Optional Ollama Cloud key for automatic cloud model discovery |
+| `NVIDIA_API_KEY` | -- | Optional NVIDIA NIM key. Auto-adds `https://integrate.api.nvidia.com/v1`; generate one at [build.nvidia.com](https://build.nvidia.com/settings/api-keys). |
 | `OPENAI_API_KEY` | -- | Optional OpenAI key. Prefer adding providers in the app unless pre-seeding. |
 | `SEARXNG_INSTANCE` | `http://localhost:8080` | SearXNG URL. Docker overrides this to `http://searxng:8080`. |
+| Search API keys | -- | Optional `DATA_BRAVE_API_KEY`, `GOOGLE_API_KEY` + `GOOGLE_PSE_CX`, `TAVILY_API_KEY`, `SERPER_API_KEY`. Settings → Search can run one engine or **All available engines**. |
 | `AUTH_ENABLED` | `true` | Enable/disable login |
 | `LOCALHOST_BYPASS` | `false` | Development-only auth bypass for loopback requests. Keep false for shared/network deployments. |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | Database connection string |
