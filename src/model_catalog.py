@@ -110,6 +110,68 @@ def parse_lm_studio_catalog(data: Any) -> Optional[Tuple[list[str], Dict[str, Di
     return model_ids, metadata
 
 
+def parse_standard_model_catalog(
+    data: Any,
+) -> Optional[Tuple[list[str], Dict[str, Dict[str, Any]]]]:
+    """Parse OpenAI/Anthropic-style model lists and retain useful limits."""
+    if not isinstance(data, dict):
+        return None
+    raw_models = data.get("data")
+    if not isinstance(raw_models, list):
+        raw_models = data.get("models")
+    if not isinstance(raw_models, list):
+        return None
+
+    model_ids: list[str] = []
+    metadata: Dict[str, Dict[str, Any]] = {}
+    context_fields = (
+        "context_length",
+        "context_window",
+        "max_context_length",
+        "max_model_len",
+        "max_seq_len",
+        "max_input_tokens",
+        "input_token_limit",
+    )
+    for raw in raw_models:
+        if not isinstance(raw, dict):
+            continue
+        model_id = str(raw.get("id") or raw.get("name") or raw.get("model") or "").strip()
+        if not model_id:
+            continue
+
+        context = None
+        for field in context_fields:
+            context = _positive_int(raw.get(field))
+            if context:
+                break
+        if context is None:
+            for block_name in ("meta", "model_extra", "capabilities", "limits"):
+                block = raw.get(block_name)
+                if not isinstance(block, dict):
+                    continue
+                for field in context_fields:
+                    context = _positive_int(block.get(field))
+                    if context:
+                        break
+                if context:
+                    break
+
+        item: Dict[str, Any] = {
+            "id": model_id,
+            "display_name": str(raw.get("display_name") or raw.get("displayName") or model_id.split("/")[-1]),
+        }
+        if context:
+            item["context_length"] = context
+        max_output = _positive_int(raw.get("max_output_tokens") or raw.get("output_token_limit"))
+        if max_output:
+            item["max_output_tokens"] = max_output
+        model_ids.append(model_id)
+        metadata[model_id] = item
+
+    return (model_ids, metadata) if model_ids else None
+
+
 def fetch_lm_studio_catalog(
     base_url: str,
     api_key: Optional[str] = None,

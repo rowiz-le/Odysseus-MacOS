@@ -88,7 +88,13 @@ def _configured_model_context(url: str, model: str) -> Optional[int]:
                 item = find_model_metadata(metadata, model)
                 if not item:
                     return None
-                for field in ("context_length", "max_context_length"):
+                for field in (
+                    "context_length",
+                    "context_window",
+                    "max_context_length",
+                    "max_input_tokens",
+                    "input_token_limit",
+                ):
                     value = item.get(field)
                     if isinstance(value, (int, float)) and value > 0:
                         return int(value)
@@ -124,8 +130,15 @@ REQUEST_TIMEOUT = 5
 # Substring matching — use the shortest unique prefix so variants get caught.
 KNOWN_CONTEXT_WINDOWS = {
     # --- Anthropic ---
+    'claude-opus-4-8': 1000000,
+    'claude-opus-4.8': 1000000,
+    'claude-opus-4-7': 1000000,
+    'claude-opus-4.7': 1000000,
+    'claude-opus-4-6': 1000000,
+    'claude-opus-4.6': 1000000,
+    'claude-sonnet-4-6': 1000000,
+    'claude-sonnet-4.6': 1000000,
     'claude-sonnet-4-5': 200000,
-    'claude-sonnet-4-6': 200000,
     'claude-sonnet-4': 200000,
     'claude-opus-4': 200000,
     'claude-haiku-4': 200000,
@@ -137,6 +150,9 @@ KNOWN_CONTEXT_WINDOWS = {
     'claude-3-haiku': 200000,
 
     # --- OpenAI ---
+    'gpt-5.5': 1050000,
+    'gpt-5.4': 1050000,
+    'gpt-5.2': 400000,
     'gpt-5': 400000,
     'gpt-4.1': 1047576,
     'gpt-4.1-mini': 1047576,
@@ -154,6 +170,7 @@ KNOWN_CONTEXT_WINDOWS = {
     'o4-mini': 200000,
 
     # --- DeepSeek ---
+    'deepseek-v4': 1000000,
     'deepseek-chat': 64000,
     'deepseek-coder': 64000,
     'deepseek-reasoner': 64000,
@@ -162,6 +179,9 @@ KNOWN_CONTEXT_WINDOWS = {
     'deepseek-v2': 64000,
 
     # --- Google ---
+    'gemini-3.5': 1048576,
+    'gemini-3.1': 1048576,
+    'gemini-3': 1048576,
     'gemini-2.5-pro': 1048576,
     'gemini-2.5-flash': 1048576,
     'gemini-2.0-flash': 1048576,
@@ -293,6 +313,35 @@ def _lookup_known(model: str) -> Optional[int]:
     return best_ctx
 
 
+def _apply_provider_context_limit(
+    endpoint_url: str,
+    model: str,
+    context_length: Optional[int],
+) -> Optional[int]:
+    """Apply documented provider-specific limits to an otherwise known model.
+
+    Claude Opus 4.8 supports a 1M-token window on the Claude API, Amazon
+    Bedrock, and Vertex AI, while Microsoft Foundry currently caps it at 200K.
+    OpenAI-compatible gateways with no provider-identifying hostname retain the
+    model's normal limit.
+    """
+    if not context_length:
+        return context_length
+    try:
+        host = (urlparse(endpoint_url).hostname or "").lower()
+    except Exception:
+        host = ""
+    normalized = (model or "").lower().replace(".", "-").replace("_", "-")
+    is_foundry = (
+        host.endswith(".azure.com")
+        or host.endswith(".azure.us")
+        or host.endswith(".microsoft.com")
+    )
+    if is_foundry and "claude-opus-4-8" in normalized:
+        return min(int(context_length), 200000)
+    return int(context_length)
+
+
 def _query_context_length(endpoint_url: str, model: str) -> int:
     """Query the model API for context length."""
     known = _lookup_known(model)
@@ -301,7 +350,7 @@ def _query_context_length(endpoint_url: str, model: str) -> int:
     configured_context = _configured_model_context(endpoint_url, model)
     if configured_context:
         logger.info(f"Using configured model metadata for {model}: {configured_context}")
-        return configured_context
+        return _apply_provider_context_limit(endpoint_url, model, configured_context)
 
     # Large OpenAI-compatible proxies can make /models expensive. If the
     # endpoint is explicitly configured as API/proxy, prefer known context
@@ -309,7 +358,7 @@ def _query_context_length(endpoint_url: str, model: str) -> int:
     if configured_kind in ("api", "proxy"):
         if known:
             logger.info(f"Using known context window for {model}: {known}")
-            return known
+            return _apply_provider_context_limit(endpoint_url, model, known)
         return DEFAULT_CONTEXT
 
     # Try llama.cpp /slots endpoint first — reports actual serving context
@@ -366,6 +415,8 @@ def _query_context_length(endpoint_url: str, model: str) -> int:
                         "max_model_len",
                         "max_context_length",
                         "max_seq_len",
+                        "max_input_tokens",
+                        "input_token_limit",
                     ):
                         val = m.get(field)
                         if val and isinstance(val, (int, float)) and val > 0:
@@ -373,14 +424,31 @@ def _query_context_length(endpoint_url: str, model: str) -> int:
                             break
 
                     if not api_ctx:
-                        meta = m.get("meta") or m.get("model_extra") or {}
-                        if isinstance(meta, dict):
+                        metadata_blocks = (
+                            m.get("meta"),
+                            m.get("model_extra"),
+                            m.get("capabilities"),
+                            m.get("limits"),
+                        )
+                        for meta in metadata_blocks:
+                            if not isinstance(meta, dict):
+                                continue
                             # n_ctx is the actual serving context (set via -c flag in llama.cpp)
-                            for field in ("n_ctx", "context_length", "context_window", "max_model_len"):
+                            for field in (
+                                "n_ctx",
+                                "context_length",
+                                "context_window",
+                                "max_model_len",
+                                "max_context_length",
+                                "max_input_tokens",
+                                "input_token_limit",
+                            ):
                                 val = meta.get(field)
                                 if val and isinstance(val, (int, float)) and val > 0:
                                     api_ctx = int(val)
                                     break
+                            if api_ctx:
+                                break
                     break
     except Exception as e:
         logger.debug(f"Failed to query context length for {model}: {e}")
@@ -395,12 +463,12 @@ def _query_context_length(endpoint_url: str, model: str) -> int:
         result = max(api_ctx, known)
         if api_ctx < known:
             logger.info(f"API reported {api_ctx} for {model}, using known {known} instead")
-        return result
+        return _apply_provider_context_limit(endpoint_url, model, result)
     if api_ctx:
-        return api_ctx
+        return _apply_provider_context_limit(endpoint_url, model, api_ctx)
     if known:
         logger.info(f"Using known context window for {model}: {known}")
-        return known
+        return _apply_provider_context_limit(endpoint_url, model, known)
 
     return DEFAULT_CONTEXT
 

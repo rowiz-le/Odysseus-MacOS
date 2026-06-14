@@ -50,6 +50,15 @@ def test_macos_launcher_keeps_downloads_and_navigation_inside_the_app():
     assert 'MenuAction("Odysseus Home", open_odysseus_home)' in launcher_source
 
 
+def test_context_compaction_ui_does_not_report_reload_failures_as_compaction_failures():
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "static/js/chatRenderer.js").read_text(encoding="utf-8")
+
+    assert "window._compactionsInFlight" in source
+    assert "Context compacted, but chat reload failed:" in source
+    assert "errorData.detail || errorData.message" in source
+
+
 class _FakeColumn:
     def __init__(self, name):
         self.name = name

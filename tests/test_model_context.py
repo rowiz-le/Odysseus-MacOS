@@ -3,7 +3,12 @@
 import pytest
 
 import src.model_context as model_context
-from src.model_context import _is_local_endpoint, estimate_tokens, _lookup_known
+from src.model_context import (
+    _apply_provider_context_limit,
+    _is_local_endpoint,
+    _lookup_known,
+    estimate_tokens,
+)
 
 
 class TestIsLocalEndpoint:
@@ -87,6 +92,39 @@ class TestLookupKnown:
     def test_claude_sonnet(self):
         assert _lookup_known("claude-sonnet-4-5") == 200000
 
+    @pytest.mark.parametrize(
+        "model",
+        [
+            "claude-opus-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-opus-4.8",
+        ],
+    )
+    def test_claude_opus_long_context(self, model):
+        assert _lookup_known(model) == 1000000
+
+    def test_claude_sonnet_46_long_context(self):
+        assert _lookup_known("claude-sonnet-4.6") == 1000000
+
+    @pytest.mark.parametrize("model", ["gpt-5.4", "gpt-5.5"])
+    def test_latest_gpt_long_context(self, model):
+        assert _lookup_known(model) == 1050000
+
+    @pytest.mark.parametrize(
+        "model",
+        ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-v4-flash-search"],
+    )
+    def test_deepseek_v4_long_context(self, model):
+        assert _lookup_known(model) == 1000000
+
+    @pytest.mark.parametrize(
+        "model",
+        ["gemini-3.1-pro", "gemini-3-flash", "gemini-3.5-flash"],
+    )
+    def test_gemini_3_long_context(self, model):
+        assert _lookup_known(model) == 1048576
+
     def test_gpt4o(self):
         assert _lookup_known("gpt-4o") == 128000
 
@@ -122,3 +160,19 @@ def test_query_context_prefers_persisted_per_model_metadata(monkeypatch):
         "http://127.0.0.1:1234/v1/chat/completions",
         "qwen/qwen3.6-35b-a3b",
     ) == 262144
+
+
+def test_microsoft_foundry_caps_claude_opus_48():
+    assert _apply_provider_context_limit(
+        "https://example.services.ai.azure.com/anthropic/v1/messages",
+        "claude-opus-4-8",
+        1000000,
+    ) == 200000
+
+
+def test_generic_proxy_keeps_claude_opus_48_long_context():
+    assert _apply_provider_context_limit(
+        "https://gateway.example/v1/chat/completions",
+        "claude-opus-4-8",
+        1000000,
+    ) == 1000000

@@ -920,7 +920,10 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
         if not older:
             raise HTTPException(400, "Nothing old enough to compact")
 
-        from src.context_compactor import SELF_SUMMARY_SYSTEM_PROMPT
+        from src.context_compactor import (
+            COMPACTION_TIMEOUT_SECONDS,
+            SELF_SUMMARY_SYSTEM_PROMPT,
+        )
         from src.endpoint_resolver import resolve_endpoint
         from src.llm_core import llm_call_async
 
@@ -951,7 +954,7 @@ def setup_session_routes(session_manager: SessionManager, config: dict, webhook_
                 temperature=0.2,
                 max_tokens=1024,
                 headers=headers,
-                timeout=60,
+                timeout=COMPACTION_TIMEOUT_SECONDS,
             )
         except Exception as e:
             logger.error("Manual compaction failed: %s", e)

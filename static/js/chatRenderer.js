@@ -1755,6 +1755,14 @@ export function displayMetrics(messageElement, metrics) {
           e.stopPropagation();
           const sid = window.sessionModule && window.sessionModule.getCurrentSessionId();
           if (!sid) return;
+          if (!window._compactionsInFlight) window._compactionsInFlight = new Set();
+          if (window._compactionsInFlight.has(sid)) {
+            compactBtn.disabled = true;
+            compactBtn.textContent = 'Compacting…';
+            return;
+          }
+          window._compactionsInFlight.add(sid);
+          compactBtn.disabled = true;
           popup.remove();
 
           // Add a spinner bubble at the bottom of chat
@@ -1790,8 +1798,14 @@ export function displayMetrics(messageElement, metrics) {
             clearInterval(waveInterval);
             if (res.ok) {
               const data = await res.json();
+              compactBody.innerHTML = '<span style="color:var(--green);">' +
+                (data.message || 'Context compacted successfully.') + '</span>';
               // Reload session — the compacted history will show
-              if (window.sessionModule) await window.sessionModule.selectSession(sid);
+              try {
+                if (window.sessionModule) await window.sessionModule.selectSession(sid);
+              } catch (reloadErr) {
+                console.warn('Context compacted, but chat reload failed:', reloadErr);
+              }
               // Scroll to the compacted message (first msg with compacted metadata)
               setTimeout(() => {
                 const msgs = document.querySelectorAll('#chat-history .msg');
@@ -1803,12 +1817,21 @@ export function displayMetrics(messageElement, metrics) {
                 }
               }, 200);
             } else {
-              compactBody.innerHTML = '<span style="color:var(--red);">Compaction failed. Try again later.</span>';
+              let detail = 'Compaction failed. Try again later.';
+              try {
+                const errorData = await res.json();
+                detail = errorData.detail || errorData.message || detail;
+              } catch (_err) { /* keep fallback */ }
+              compactBody.textContent = detail;
+              compactBody.style.color = 'var(--red)';
             }
           } catch (err) {
             clearInterval(waveInterval);
             console.warn('compact failed:', err);
-            compactBody.innerHTML = '<span style="color:var(--red);">Compaction failed: ' + err.message + '</span>';
+            compactBody.textContent = 'Compaction failed: ' + err.message;
+            compactBody.style.color = 'var(--red)';
+          } finally {
+            window._compactionsInFlight.delete(sid);
           }
         });
       }

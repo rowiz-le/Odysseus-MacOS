@@ -37,6 +37,7 @@ def _content_as_text(content: Any) -> str:
 
 COMPACT_THRESHOLD = 0.85  # Trigger compaction at 85% of context window
 SUMMARY_MAX_TOKENS = 1024
+COMPACTION_TIMEOUT_SECONDS = 120
 SMALL_CONTEXT_LIMIT = 8192  # Models with context <= this get aggressive trimming
 
 # Cursor-style self-summarization prompt — produces structured, dense summaries
@@ -335,11 +336,11 @@ async def maybe_compact(
             temperature=0.2,
             max_tokens=SUMMARY_MAX_TOKENS,
             headers=compact_headers,
-            timeout=30,
+            timeout=COMPACTION_TIMEOUT_SECONDS,
         )
     except Exception as e:
         logger.error(f"Compaction summary failed: {e}")
-        return system_msgs + recent, context_length, False
+        return messages, context_length, False
 
     summary_msg = {
         "role": "system",

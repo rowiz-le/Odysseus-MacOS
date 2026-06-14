@@ -30,7 +30,7 @@ from src.endpoint_resolver import (
     build_headers,
 )
 from src.auth_helpers import _auth_disabled, owner_filter
-from src.model_catalog import fetch_lm_studio_catalog
+from src.model_catalog import fetch_lm_studio_catalog, parse_standard_model_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -767,6 +767,24 @@ def _probe_endpoint_catalog(
     catalog = fetch_lm_studio_catalog(base_url, api_key, timeout=timeout)
     if catalog is not None:
         return catalog
+    from src.endpoint_resolver import resolve_url
+
+    base = resolve_url(_normalize_base(base_url))
+    url = _safe_models_url(base)
+    if _detect_provider(base) == "anthropic":
+        headers = {"anthropic-version": "2023-06-01"}
+        if api_key:
+            headers["x-api-key"] = api_key
+    else:
+        headers = build_headers(api_key, base)
+    try:
+        response = _httpx_get(url, headers=headers, timeout=timeout, verify=llm_verify())
+        response.raise_for_status()
+        parsed = parse_standard_model_catalog(response.json())
+        if parsed is not None:
+            return parsed
+    except Exception as exc:
+        logger.debug("Rich model metadata probe failed for %s: %s", url, exc)
     return _probe_endpoint_standard(base_url, api_key, timeout), {}
 
 

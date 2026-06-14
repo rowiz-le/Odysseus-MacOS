@@ -560,7 +560,10 @@ def setup_history_routes(session_manager) -> APIRouter:
             compact_model = util_model or session.model
             compact_headers = util_headers if util_url else session.headers
 
-            from src.context_compactor import SELF_SUMMARY_SYSTEM_PROMPT
+            from src.context_compactor import (
+                COMPACTION_TIMEOUT_SECONDS,
+                SELF_SUMMARY_SYSTEM_PROMPT,
+            )
             compaction_count = sum(1 for m in session.history if isinstance(m, ChatMessage) and "[Conversation summary" in (m.content or ""))
             sys_prompt = SELF_SUMMARY_SYSTEM_PROMPT.replace("{count}", str(len(older))).replace("{n}", str(compaction_count + 1))
             summary = await llm_call_async(
@@ -570,7 +573,7 @@ def setup_history_routes(session_manager) -> APIRouter:
                     {"role": "user", "content": convo_text},
                 ],
                 temperature=0.2, max_tokens=1024,
-                headers=compact_headers, timeout=30,
+                headers=compact_headers, timeout=COMPACTION_TIMEOUT_SECONDS,
             )
 
             # Replace session history: summary as system message + recent messages
