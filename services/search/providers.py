@@ -1,4 +1,4 @@
-"""Search provider implementations: SearXNG, Brave, DuckDuckGo, Google PSE, Tavily, Serper."""
+"""Search provider implementations: SearXNG, Brave, DuckDuckGo, Google PSE, Tavily, Serper, Exa."""
 
 import json
 import logging
@@ -29,6 +29,7 @@ PROVIDER_INFO = {
     "google_pse": ("Google PSE",      True,  False),
     "tavily":   ("Tavily",            True,  False),
     "serper":   ("Serper",            True,  False),
+    "exa":      ("Exa",               True,  False),
     "disabled": ("Disabled",          False, False),
 }
 
@@ -61,21 +62,26 @@ def _get_provider_key(provider: str) -> str:
         "google_pse": "google_pse_key",
         "tavily": "tavily_api_key",
         "serper": "serper_api_key",
+        "exa": "exa_api_key",
     }
     field = key_map.get(provider, "")
     if field:
         val = (settings.get(field) or "").strip()
         if val:
             return val
-    # Legacy fallback: old shared search_api_key field
-    legacy = (settings.get("search_api_key") or "").strip()
-    if legacy:
-        return legacy
+    # Legacy fallback: old shared search_api_key field. Keep it for providers
+    # that historically used the shared box, but not Exa: sending a Google /
+    # Tavily / Serper key as x-api-key to Exa creates a false "configured" UI.
+    if provider != "exa":
+        legacy = (settings.get("search_api_key") or "").strip()
+        if legacy:
+            return legacy
     env_map = {
         "brave": "DATA_BRAVE_API_KEY",
         "google_pse": "GOOGLE_API_KEY",
         "tavily": "TAVILY_API_KEY",
         "serper": "SERPER_API_KEY",
+        "exa": "EXA_API_KEY",
     }
     env_name = env_map.get(provider, "")
     return (os.environ.get(env_name) or "").strip() if env_name else ""
@@ -645,4 +651,89 @@ def serper_search(query: str, count: int = 10, time_filter: Optional[str] = None
         })
 
     logger.info(f"Serper returned {len(results)} results")
+    return results
+
+
+# ── Exa ──
+
+def _exa_highlights_to_snippet(highlights) -> str:
+    """Normalize Exa highlight variants into a compact snippet string."""
+    if not highlights:
+        return ""
+    if isinstance(highlights, str):
+        return highlights
+    if not isinstance(highlights, list):
+        return str(highlights)
+    parts = []
+    for item in highlights:
+        if isinstance(item, str):
+            text = item
+        elif isinstance(item, dict):
+            text = item.get("text") or item.get("highlight") or item.get("content") or ""
+        else:
+            text = str(item)
+        text = " ".join(str(text).split())
+        if text:
+            parts.append(text)
+    return " … ".join(parts)
+
+
+def exa_search(query: str, count: int = 10, time_filter: Optional[str] = None) -> List[dict]:
+    """Search using Exa's /search API. Requires exa_api_key or EXA_API_KEY."""
+    api_key = _get_provider_key("exa") or os.environ.get("EXA_API_KEY", "")
+    if not api_key:
+        logger.warning("Exa: no API key configured")
+        return []
+
+    payload = {
+        "query": query,
+        "type": "auto",
+        "numResults": normalize_result_count(count, default=10),
+        "contents": {
+            "highlights": True,
+        },
+    }
+
+    try:
+        response = httpx.post(
+            "https://api.exa.ai/search",
+            json=payload,
+            headers={"x-api-key": api_key, "Content-Type": "application/json"},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if response.status_code == 429:
+            raise RateLimitError("Exa rate limit hit")
+        response.raise_for_status()
+    except httpx.RequestError as e:
+        error_logger.error(f"Exa search failed: {e}")
+        return []
+    except RateLimitError as e:
+        error_logger.error(str(e))
+        return []
+
+    try:
+        data = response.json()
+    except json.JSONDecodeError as e:
+        error_logger.error(f"Exa returned invalid JSON: {e}")
+        return []
+
+    results = []
+    for item in data.get("results", [])[:count]:
+        url = item.get("url", "")
+        if not url:
+            continue
+        snippet = (
+            _exa_highlights_to_snippet(item.get("highlights"))
+            or item.get("summary")
+            or item.get("text")
+            or ""
+        )
+        results.append({
+            "title": item.get("title", "") or url,
+            "url": url,
+            "snippet": snippet,
+            "age": item.get("publishedDate", "") or item.get("published_date", ""),
+        })
+
+    logger.info(f"Exa returned {len(results)} results")
     return results

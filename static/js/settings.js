@@ -991,17 +991,18 @@ var _searchProviderHints = {
   google_pse: 'Requires a Google API key and a Programmable Search Engine ID (CX). Create one at programmablesearchengine.google.com',
   tavily: 'AI-optimized search. 1,000 free credits/month at tavily.com',
   serper: 'Google results via API. 2,500 free queries at serper.dev',
+  exa: 'Neural/web search for coding agents and research. Add an API key from dashboard.exa.ai or set EXA_API_KEY.',
   disabled: 'Web search and deep research tools will be unavailable.',
 };
-var _searchNeedsKey = { brave: 1, google_pse: 1, tavily: 1, serper: 1 };
+var _searchNeedsKey = { brave: 1, google_pse: 1, tavily: 1, serper: 1, exa: 1 };
 var _searchLabels = {
   all: 'All available engines',
   searxng: 'SearXNG', duckduckgo: 'DuckDuckGo', brave: 'Brave Search',
-  google_pse: 'Google PSE', tavily: 'Tavily', serper: 'Serper', disabled: 'Disabled',
+  google_pse: 'Google PSE', tavily: 'Tavily', serper: 'Serper', exa: 'Exa', disabled: 'Disabled',
 };
 var _searchKeyFields = {
   brave: 'brave_api_key', google_pse: 'google_pse_key',
-  tavily: 'tavily_api_key', serper: 'serper_api_key',
+  tavily: 'tavily_api_key', serper: 'serper_api_key', exa: 'exa_api_key',
 };
 
 async function initSearchSettings() {
@@ -1021,6 +1022,7 @@ async function initSearchSettings() {
   var _settings = {};
 
   function keyFieldFor(prov) { return _searchKeyFields[prov] || ''; }
+  function allowsLegacySearchKey(prov) { return prov !== 'exa'; }
 
   function normalizedResultCount() {
     var value = parseInt(countSel.value, 10);
@@ -1033,7 +1035,8 @@ async function initSearchSettings() {
 
   function loadKeyForProvider(prov) {
     var field = keyFieldFor(prov);
-    keyInput.value = field ? (_settings[field] || _settings.search_api_key || '') : '';
+    var legacy = allowsLegacySearchKey(prov) ? (_settings.search_api_key || '') : '';
+    keyInput.value = field ? (_settings[field] || legacy || '') : '';
   }
 
   function updateVisibility() {
@@ -1049,6 +1052,7 @@ async function initSearchSettings() {
     else if (prov === 'google_pse') keyInput.placeholder = 'Google API key';
     else if (prov === 'tavily') keyInput.placeholder = 'Tavily API key';
     else if (prov === 'serper') keyInput.placeholder = 'Serper API key';
+    else if (prov === 'exa') keyInput.placeholder = 'Exa API key';
     else keyInput.placeholder = 'API key';
     loadKeyForProvider(prov);
   }
@@ -1074,7 +1078,8 @@ async function initSearchSettings() {
       var label = _searchLabels[active] || active;
       var extra = '';
       var kf = keyFieldFor(active);
-      var hasKey = kf ? ((s[kf] || '').trim() || (s.search_api_key || '').trim()) : false;
+      var legacy = allowsLegacySearchKey(active) ? (s.search_api_key || '').trim() : '';
+      var hasKey = kf ? ((s[kf] || '').trim() || legacy) : false;
       if (_searchNeedsKey[active]) {
         extra = hasKey ? ' (key set)' : ' (no key)';
       } else if (active === 'searxng' && (s.search_url || '').trim()) {
@@ -1311,6 +1316,7 @@ var _SEARCH_PROVIDER_LOGOS = {
   google_pse:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.35 11.1H12v3.2h5.35c-.5 2.4-2.55 4-5.35 4-3.25 0-5.9-2.65-5.9-5.9s2.65-5.9 5.9-5.9c1.55 0 2.95.55 4.05 1.55l2.4-2.4C16.85 4.05 14.55 3 12 3 7 3 3 7 3 12s4 9 9 9c5.2 0 8.65-3.65 8.65-8.8 0-.4-.05-.7-.3-1.1z"/></svg>',
   tavily:    '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 8.5l4 2.5v6l6 3.5 6-3.5v-6l4-2.5L12 2zm-4 9.5L12 14l4-2.5V16l-4 2.5L8 16v-4.5z"/></svg>',
   serper:    '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 4a7 7 0 1 0 4.2 12.6l4.5 4.5 1.4-1.4-4.5-4.5A7 7 0 0 0 11 4zm0 2a5 5 0 1 1 0 10 5 5 0 0 1 0-10zm-1 2v2H8v2h2v2h2v-2h2V10h-2V8h-2z"/></svg>',
+  exa:       '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3.2l7.6 4.4v8.8L12 20.8l-7.6-4.4V7.6L12 3.2zm0 2.3L6.4 8.7v6.6l5.6 3.2 5.6-3.2V8.7L12 5.5zm0 2.7l3.2 1.85v3.7L12 15.6l-3.2-1.85v-3.7L12 8.2zm0 1.9l-1.55.9v1.8l1.55.9 1.55-.9V11L12 10.1z"/></svg>',
   disabled:  '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><line x1="6" y1="6" x2="18" y2="18"/></svg>',
 };
 
@@ -1421,7 +1427,8 @@ async function initResearchSearchSettings() {
       if (!prov) return;
       var kf = _searchKeyFields[prov];
       if (!kf) return;
-      var hasKey = ((settings[kf] || '').trim() || (settings.search_api_key || '').trim());
+      var legacy = allowsLegacySearchKey(prov) ? (settings.search_api_key || '').trim() : '';
+      var hasKey = ((settings[kf] || '').trim() || legacy);
       if (!hasKey) {
         opt.textContent = (_searchLabels[prov] || prov) + ' (no key)';
         opt.style.color = 'var(--red)';

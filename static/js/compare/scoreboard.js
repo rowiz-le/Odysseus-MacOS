@@ -16,7 +16,7 @@ const _TYPE_ICONS = {
 };
 
 /** Detect search provider names to fix legacy votes without mode. */
-const _searchProviderNames = new Set(['brave search', 'duckduckgo', 'google', 'searxng', 'bing', 'tavily']);
+const _searchProviderNames = new Set(['brave search', 'duckduckgo', 'google', 'searxng', 'bing', 'tavily', 'serper', 'exa']);
 
 /** Guess the compare mode for a vote record (legacy votes lack a mode field). */
 function _guessVoteMode(v) {

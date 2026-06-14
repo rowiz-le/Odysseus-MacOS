@@ -30,7 +30,7 @@ export function getCurrentProvider() {
 const _labels = {
   all: 'All search engines',
   searxng: 'SearXNG', brave: 'Brave', duckduckgo: 'DuckDuckGo',
-  google_pse: 'Google', tavily: 'Tavily', serper: 'Serper',
+  google_pse: 'Google', tavily: 'Tavily', serper: 'Serper', exa: 'Exa',
   disabled: 'search (disabled)',
 };
 

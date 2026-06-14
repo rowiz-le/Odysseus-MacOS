@@ -3,11 +3,11 @@
 ![Odysseus macOS](docs/odysseus-macos-app.png)
 
 <p align="center">
-  <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.15.1/Odysseus-macOS-2026.06.15.1.dmg">
+  <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.15.2/Odysseus-macOS-2026.06.15.2.dmg">
     <img alt="Tải Odysseus macOS" src="https://img.shields.io/badge/T%E1%BA%A3i%20Odysseus%20macOS-DMG-ef7f8d?style=for-the-badge&logo=apple&logoColor=white">
   </a>
-  <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/tag/v2026.06.15.1">
-    <img alt="Release" src="https://img.shields.io/badge/Release-v2026.06.15.1-111111?style=for-the-badge">
+  <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/tag/v2026.06.15.2">
+    <img alt="Release" src="https://img.shields.io/badge/Release-v2026.06.15.2-111111?style=for-the-badge">
   </a>
 </p>
 
@@ -15,7 +15,7 @@
 thân thiện hơn, có app launcher riêng, chạy local-first, và có file `.dmg`
 kéo-thả để cài nhanh trên macOS.
 
-**Tải nhanh:** [Odysseus-macOS-2026.06.15.1.dmg](https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.15.1/Odysseus-macOS-2026.06.15.1.dmg)
+**Tải nhanh:** [Odysseus-macOS-2026.06.15.2.dmg](https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.15.2/Odysseus-macOS-2026.06.15.2.dmg)
 
 **Hướng dẫn sử dụng:** [docs/HUONG_DAN_SU_DUNG_VI.md](docs/HUONG_DAN_SU_DUNG_VI.md)
 
@@ -52,7 +52,7 @@ chạy trên máy của bạn, với dữ liệu của bạn, ưu tiên local-fi
 ## Giao diện hiện tại
 
 Toàn bộ ảnh và demo dưới đây được chụp trực tiếp từ **Odysseus macOS
-v2026.06.14.5**, không dùng ảnh AI hay giao diện mô phỏng. Tên chat, báo cáo và
+v2026.06.15.2**, không dùng ảnh AI hay giao diện mô phỏng. Tên chat, báo cáo và
 tài liệu cá nhân đã được làm mờ trước khi phát hành.
 
 ### Tech demo
@@ -240,7 +240,7 @@ Key settings:
 | `NVIDIA_API_KEY` | -- | Optional NVIDIA NIM key. Auto-adds `https://integrate.api.nvidia.com/v1`; generate one at [build.nvidia.com](https://build.nvidia.com/settings/api-keys). |
 | `OPENAI_API_KEY` | -- | Optional OpenAI key. Prefer adding providers in the app unless pre-seeding. |
 | `SEARXNG_INSTANCE` | `http://localhost:8080` | SearXNG URL. Docker overrides this to `http://searxng:8080`. |
-| Search API keys | -- | Optional `DATA_BRAVE_API_KEY`, `GOOGLE_API_KEY` + `GOOGLE_PSE_CX`, `TAVILY_API_KEY`, `SERPER_API_KEY`. Settings → Search can run one engine or **All available engines**. |
+| Search API keys | -- | Optional `DATA_BRAVE_API_KEY`, `GOOGLE_API_KEY` + `GOOGLE_PSE_CX`, `TAVILY_API_KEY`, `SERPER_API_KEY`, `EXA_API_KEY`. Settings → Search can run one engine or **All available engines**. |
 | `AUTH_ENABLED` | `true` | Enable/disable login |
 | `LOCALHOST_BYPASS` | `false` | Development-only auth bypass for loopback requests. Keep false for shared/network deployments. |
 | `DATABASE_URL` | `sqlite:///./data/app.db` | Database connection string |

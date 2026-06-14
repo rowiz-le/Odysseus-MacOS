@@ -98,6 +98,89 @@ def test_search_result_count_normalization(monkeypatch):
     assert providers.normalize_result_count("not-a-number") == 5
 
 
+def test_exa_search_parses_highlights(monkeypatch):
+    from services.search import providers
+
+    call = {}
+
+    class Response:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "results": [
+                    {
+                        "title": "Exa result",
+                        "url": "https://example.com/exa",
+                        "highlights": ["first highlight", {"text": "second highlight"}],
+                        "publishedDate": "2026-06-15",
+                    }
+                ]
+            }
+
+    def fake_post(url, **kwargs):
+        call["url"] = url
+        call.update(kwargs)
+        return Response()
+
+    monkeypatch.setattr(providers, "_get_provider_key", lambda provider: "exa-key" if provider == "exa" else "")
+    monkeypatch.setattr(providers.httpx, "post", fake_post)
+
+    results = providers.exa_search("coding agents", count=3)
+
+    assert call["url"] == "https://api.exa.ai/search"
+    assert call["headers"]["x-api-key"] == "exa-key"
+    assert call["json"]["type"] == "auto"
+    assert call["json"]["numResults"] == 3
+    assert call["json"]["contents"] == {"highlights": True}
+    assert results == [
+        {
+            "title": "Exa result",
+            "url": "https://example.com/exa",
+            "snippet": "first highlight … second highlight",
+            "age": "2026-06-15",
+        }
+    ]
+
+
+def test_exa_does_not_reuse_legacy_shared_search_key(monkeypatch):
+    from services.search import providers
+
+    monkeypatch.setattr(providers, "_get_search_settings", lambda: {
+        "search_api_key": "legacy-provider-key",
+        "exa_api_key": "",
+    })
+    monkeypatch.delenv("EXA_API_KEY", raising=False)
+
+    assert providers._get_provider_key("exa") == ""
+    assert providers._get_provider_key("tavily") == "legacy-provider-key"
+
+
+def test_all_search_engines_includes_exa_when_configured(monkeypatch):
+    from services.search import core
+
+    monkeypatch.setattr(core, "_get_search_settings", lambda: {})
+    monkeypatch.setattr(core, "_get_provider_key", lambda provider: "exa-key" if provider == "exa" else "")
+    called = []
+
+    def fake_call_provider(provider, query, count, time_filter=None):
+        called.append(provider)
+        return [{
+            "title": provider,
+            "url": f"https://{provider}.example/result",
+            "snippet": query,
+        }]
+
+    monkeypatch.setattr(core, "_call_provider", fake_call_provider)
+    results = core.search_all_providers("query", count=6)
+
+    assert "exa" in called
+    assert any(item["search_provider"] == "exa" for item in results)
+
+
 def test_all_search_provider_dispatches_for_web_search(tmp_path, monkeypatch):
     from services.search import core
 

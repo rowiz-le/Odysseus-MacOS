@@ -333,6 +333,7 @@ function _buildPanelHTML() {
     ['brave', 'Brave'],
     ['google_pse', 'Google PSE'],
     ['serper', 'Serper'],
+    ['exa', 'Exa'],
   ];
   const providerOpts = searchProviders.map(([value, label]) =>
     `<option value="${value}">${label}</option>`

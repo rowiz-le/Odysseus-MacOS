@@ -29,6 +29,7 @@ from .providers import (
     google_pse_search,
     tavily_search,
     serper_search,
+    exa_search,
     _get_search_settings,
     _get_provider_key,
     _get_result_count,
@@ -112,6 +113,8 @@ def _call_provider(provider_name: str, query: str, count: int, time_filter: str 
         return tavily_search(query, count, time_filter)
     elif provider_name == "serper":
         return serper_search(query, count, time_filter)
+    elif provider_name == "exa":
+        return exa_search(query, count, time_filter)
     return []
 
 
@@ -119,10 +122,10 @@ def search_all_providers(query: str, count: int = 10, time_filter: str = None) -
     """Query every configured provider concurrently and merge unique results."""
     count = normalize_result_count(count, default=10)
     settings = _get_search_settings()
-    providers = ["searxng", "duckduckgo", "brave", "google_pse", "tavily", "serper"]
+    providers = ["searxng", "duckduckgo", "brave", "google_pse", "tavily", "serper", "exa"]
     enabled = []
     for provider in providers:
-        if provider in {"brave", "tavily", "serper"} and not _get_provider_key(provider):
+        if provider in {"brave", "tavily", "serper", "exa"} and not _get_provider_key(provider):
             continue
         if provider == "google_pse" and (
             not _get_provider_key(provider) or not (settings.get("google_pse_cx") or "").strip()

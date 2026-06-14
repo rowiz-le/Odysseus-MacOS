@@ -1,4 +1,4 @@
-"""Search service — web search with SearXNG."""
+"""Search service — web search with the configured provider chain."""
 
 from .core import (
     comprehensive_web_search,
@@ -8,7 +8,7 @@ from .core import (
     update_search_config,
 )
 from .content import fetch_webpage_content
-from .providers import searxng_search, searxng_search_api, PROVIDER_INFO
+from .providers import searxng_search, searxng_search_api, exa_search, PROVIDER_INFO
 from .analytics import get_search_stats, SearchEngineError, NetworkError, ParseError, RateLimitError
 from .service import SearchService, SearchResult, SearchResponse
 
@@ -25,6 +25,7 @@ __all__ = [
     "invalidate_search_cache",
     "searxng_search",
     "searxng_search_api",
+    "exa_search",
     "searxng_search_results",
     "update_search_config",
     "PROVIDER_INFO",
