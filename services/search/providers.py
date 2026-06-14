@@ -16,6 +16,9 @@ from .query import build_enhanced_query
 logger = logging.getLogger(__name__)
 
 REQUEST_TIMEOUT = 20
+SEARCH_RESULT_COUNT_MIN = 1
+SEARCH_RESULT_COUNT_MAX = 200
+SEARCH_RESULT_COUNT_DEFAULT = 5
 
 # Provider registry — maps setting value to (label, needs_key, needs_url)
 PROVIDER_INFO = {
@@ -78,14 +81,19 @@ def _get_provider_key(provider: str) -> str:
     return (os.environ.get(env_name) or "").strip() if env_name else ""
 
 
-def _get_result_count() -> int:
-    """Return configured result count, clamped between 1 and 200, default 5."""
-    settings = _get_search_settings()
+def normalize_result_count(value, default: int = SEARCH_RESULT_COUNT_DEFAULT) -> int:
+    """Coerce a result count to the supported range."""
     try:
-        val = int(settings.get("search_result_count", 5))
-        return max(1, min(val, 200))
+        count = int(value)
     except (ValueError, TypeError):
-        return 5
+        count = default
+    return max(SEARCH_RESULT_COUNT_MIN, min(count, SEARCH_RESULT_COUNT_MAX))
+
+
+def _get_result_count() -> int:
+    """Return the configured result count."""
+    settings = _get_search_settings()
+    return normalize_result_count(settings.get("search_result_count"))
 
 
 # Canonical SafeSearch levels: "strict" (default), "moderate", "off".

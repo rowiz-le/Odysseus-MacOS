@@ -1665,7 +1665,7 @@
               <div class="settings-row" style="align-items: flex-start;">
                 <label class="settings-label" style="margin-top: 6px;">Results</label>
                 <div style="flex:1">
-                  <input id="set-searchResultCount" type="number" min="1" max="200" class="settings-select" style="width:80px;" value="5">
+                  <input id="set-searchResultCount" type="number" min="1" max="200" step="1" inputmode="numeric" class="settings-select" style="width:90px;" value="5" aria-describedby="set-searchResultWarning">
                   <div id="set-searchResultWarning" class="adm-provider-help hidden" style="color: var(--orange); margin-top: 6px;">
                     Setting results &gt; 50 may be slow, consume excessive quota, or cause provider rate-limits.
                   </div>
@@ -1682,6 +1682,15 @@
               <div id="set-searchCxRow" class="settings-row" style="display:none;">
                 <label class="settings-label">CX ID</label>
                 <input id="set-searchCx" type="text" placeholder="Google PSE engine ID" class="settings-select">
+              </div>
+              <div id="set-searchFirecrawlRow" class="settings-row" style="align-items: flex-start;">
+                <label class="settings-label" style="margin-top: 6px;">Firecrawl</label>
+                <div style="flex:1">
+                  <input id="set-firecrawlApiKeys" type="password" placeholder="Key1,Key2,Key3" class="settings-select">
+                  <div class="adm-provider-help" style="margin-top: 6px;">
+                    Optional comma-separated <a href="https://firecrawl.dev" target="_blank" rel="noopener noreferrer" style="color:var(--text);text-decoration:underline;">Firecrawl</a> API keys. Deep Research tries each key in rotation, then falls back to the built-in public webpage extractor.
+                  </div>
+                </div>
               </div>
               <div id="set-searchFallbackRow" class="settings-row">
                 <label class="settings-label" title="Providers tried in order when the primary fails or hits a rate limit">Fallbacks</label>

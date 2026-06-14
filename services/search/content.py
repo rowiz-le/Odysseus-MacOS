@@ -8,6 +8,7 @@ import os
 import re
 import logging
 import socket
+import threading
 from datetime import datetime, timedelta
 from typing import List
 from urllib.parse import urljoin, urlparse
@@ -22,8 +23,11 @@ from .cache import (
     generate_cache_key,
     cleanup_cache,
 )
+from src.settings import get_setting
 
 logger = logging.getLogger(__name__)
+_FIRECRAWL_ROTATION_LOCK = threading.Lock()
+_firecrawl_rotation_index = 0
 
 _PRIVATE_NETWORKS = (
     ipaddress.ip_network("0.0.0.0/8"),
@@ -102,6 +106,36 @@ def _get_public_url(url: str, headers: dict, timeout: int, max_redirects: int = 
             return response
         current = urljoin(str(response.url), location)
     raise httpx.RequestError("Too many redirects", request=httpx.Request("GET", current))
+
+
+def _configured_firecrawl_keys() -> list[str]:
+    """Load unique Firecrawl keys from settings or environment."""
+    raw = str(get_setting("firecrawl_api_keys", "") or "").strip()
+    if not raw:
+        raw = (
+            os.environ.get("FIRECRAWL_API_KEYS")
+            or os.environ.get("FIRECRAWL_API_KEY")
+            or ""
+        )
+    keys = []
+    seen = set()
+    for key in re.split(r"[\s,]+", raw):
+        key = key.strip()
+        if key and key not in seen:
+            keys.append(key)
+            seen.add(key)
+    return keys
+
+
+def _rotated_firecrawl_keys(keys: list[str]) -> list[str]:
+    """Rotate the first key per request while retaining failover to all keys."""
+    global _firecrawl_rotation_index
+    if not keys:
+        return []
+    with _FIRECRAWL_ROTATION_LOCK:
+        start = _firecrawl_rotation_index % len(keys)
+        _firecrawl_rotation_index += 1
+    return keys[start:] + keys[:start]
 
 # PDF extraction (optional dependency)
 try:
@@ -244,7 +278,58 @@ def fetch_webpage_content(url: str, timeout: int = 5, retry_attempt: int = 0) ->
             cache_file.unlink(missing_ok=True)
             content_cache_index.pop(cache_key, None)
 
-    # Fetch
+    # Firecrawl receives the target URL, so apply the same public-network
+    # boundary as the built-in fetcher before sending anything to the service.
+    firecrawl_keys = _configured_firecrawl_keys()
+    if firecrawl_keys and _public_http_url(url):
+        for key in _rotated_firecrawl_keys(firecrawl_keys):
+            try:
+                fc_response = httpx.post(
+                    "https://api.firecrawl.dev/v1/scrape",
+                    headers={
+                        "Authorization": f"Bearer {key}",
+                        "Content-Type": "application/json",
+                    },
+                    json={"url": url, "formats": ["markdown"]},
+                    timeout=max(20, timeout + 15),
+                )
+                if fc_response.status_code != 200:
+                    logger.warning(
+                        "Firecrawl fetch failed for %s with status %s; trying another key or fallback",
+                        url,
+                        fc_response.status_code,
+                    )
+                    continue
+                fc_data = fc_response.json()
+                if not isinstance(fc_data, dict):
+                    logger.warning("Firecrawl returned an invalid response for %s", url)
+                    continue
+                data = fc_data.get("data")
+                markdown_content = data.get("markdown") if isinstance(data, dict) else ""
+                if not fc_data.get("success") or not isinstance(markdown_content, str) or not markdown_content.strip():
+                    logger.warning("Firecrawl returned no usable content for %s", url)
+                    continue
+                metadata = data.get("metadata") if isinstance(data.get("metadata"), dict) else {}
+                result = {
+                    "url": url,
+                    "title": metadata.get("title") or url,
+                    "content": markdown_content,
+                    "lists": [],
+                    "tables": [],
+                    "code_blocks": [],
+                    "meta_description": metadata.get("description", ""),
+                    "meta_keywords": "",
+                    "js_rendered": True,
+                    "js_message": "",
+                    "success": True,
+                    "error": "",
+                }
+                _cache_result(cache_file, cache_key, result, url)
+                return result
+            except Exception as e:
+                logger.warning("Firecrawl fetch error for %s: %s", url, e)
+
+    # Fetch fallback
     try:
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",

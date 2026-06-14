@@ -56,6 +56,7 @@ DEFAULT_SETTINGS = {
     "search_fallback_chain": ["duckduckgo"],
     "search_url": "",
     "search_result_count": 5,
+    "firecrawl_api_keys": "",
     # SafeSearch level applied to every provider that exposes one.
     # "strict"   — block adult / explicit results (default; matches what users
     #              expect from a research tool and avoids unrelated NSFW URLs

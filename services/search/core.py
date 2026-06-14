@@ -32,6 +32,7 @@ from .providers import (
     _get_search_settings,
     _get_provider_key,
     _get_result_count,
+    normalize_result_count,
 )
 from .content import (
     fetch_webpage_content,
@@ -116,6 +117,7 @@ def _call_provider(provider_name: str, query: str, count: int, time_filter: str 
 
 def search_all_providers(query: str, count: int = 10, time_filter: str = None) -> List[dict]:
     """Query every configured provider concurrently and merge unique results."""
+    count = normalize_result_count(count, default=10)
     settings = _get_search_settings()
     providers = ["searxng", "duckduckgo", "brave", "google_pse", "tavily", "serper"]
     enabled = []
@@ -128,7 +130,13 @@ def search_all_providers(query: str, count: int = 10, time_filter: str = None) -
             continue
         enabled.append(provider)
 
-    per_provider = max(3, min(8, count))
+    if not enabled:
+        return []
+    # Ask each engine for enough candidates to survive cross-engine
+    # deduplication without multiplying a large user-selected limit by every
+    # provider. Individual providers may apply a lower native cap.
+    fair_share = (count + len(enabled) - 1) // len(enabled)
+    per_provider = max(3, min(50, fair_share * 2))
     combined: List[dict] = []
     with ThreadPoolExecutor(max_workers=max(1, len(enabled))) as executor:
         futures = {
@@ -162,7 +170,7 @@ def search_all_providers(query: str, count: int = 10, time_filter: str = None) -
             continue
         seen.add(key)
         deduped.append(result)
-    return rank_search_results(query, deduped)[:max(count * 2, 12)]
+    return rank_search_results(query, deduped)[:count]
 
 
 # If the self-hosted SearXNG instance is up but all enabled engines return

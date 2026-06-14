@@ -1014,12 +1014,22 @@ async function initSearchSettings() {
   var keyRow = el('set-searchKeyRow');
   var cxInput = el('set-searchCx');
   var cxRow = el('set-searchCxRow');
+  var fcKeysInput = el('set-firecrawlApiKeys');
   var fbRow = el('set-searchFallbackRow');
   var hint = el('set-searchHint');
   var msg = el('set-searchMsg');
   var _settings = {};
 
   function keyFieldFor(prov) { return _searchKeyFields[prov] || ''; }
+
+  function normalizedResultCount() {
+    var value = parseInt(countSel.value, 10);
+    if (!Number.isFinite(value)) value = 5;
+    value = Math.max(1, Math.min(200, value));
+    countSel.value = String(value);
+    if (countWarning) countWarning.classList.toggle('hidden', value <= 50);
+    return value;
+  }
 
   function loadKeyForProvider(prov) {
     var field = keyFieldFor(prov);
@@ -1050,6 +1060,7 @@ async function initSearchSettings() {
     if (_settings.search_result_count) countSel.value = String(_settings.search_result_count);
     if (_settings.search_url) urlInput.value = _settings.search_url;
     if (_settings.google_pse_cx) cxInput.value = _settings.google_pse_cx;
+    if (_settings.firecrawl_api_keys) fcKeysInput.value = _settings.firecrawl_api_keys;
   } catch (e) { console.warn('Failed to load search settings', e); }
 
   updateVisibility();
@@ -1081,9 +1092,10 @@ async function initSearchSettings() {
       var prov = provSel.value;
       var payload = {
         search_provider: prov,
-        search_result_count: parseInt(countSel.value, 10),
+        search_result_count: normalizedResultCount(),
         search_url: urlInput.value.trim(),
         google_pse_cx: cxInput.value.trim(),
+        firecrawl_api_keys: fcKeysInput.value.trim(),
       };
       var kf = keyFieldFor(prov);
       if (kf) {
@@ -1101,11 +1113,12 @@ async function initSearchSettings() {
   }
 
   provSel.addEventListener('change', function() { updateVisibility(); saveSearch(); _syncSearchPicker(); });
-  countSel.addEventListener('change', saveSearch);
+  countSel.addEventListener('change', function() { normalizedResultCount(); saveSearch(); });
   countSel.addEventListener('input', updateVisibility);
   urlInput.addEventListener('change', saveSearch);
   keyInput.addEventListener('change', saveSearch);
   cxInput.addEventListener('change', saveSearch);
+  if (fcKeysInput) fcKeysInput.addEventListener('change', saveSearch);
 
   // ── Provider picker with logos (mirrors the hidden <select>) ──
   var picker = el('search-provider-picker');

@@ -63,6 +63,41 @@ def test_all_search_engines_merge_and_deduplicate(monkeypatch):
     assert {item["search_provider"] for item in results} <= {"searxng", "duckduckgo"}
 
 
+def test_all_search_engines_honor_large_result_count(monkeypatch):
+    from services.search import core
+
+    monkeypatch.setattr(core, "_get_search_settings", lambda: {})
+    monkeypatch.setattr(core, "_get_provider_key", lambda provider: "")
+    requested_per_provider = []
+
+    def fake_call_provider(provider, query, count, time_filter=None):
+        requested_per_provider.append(count)
+        prefix = "a" if provider == "searxng" else "b"
+        return [
+            {
+                "title": f"{prefix}-{i}",
+                "url": f"https://{prefix}.example/{i}",
+                "snippet": query,
+            }
+            for i in range(count)
+        ]
+
+    monkeypatch.setattr(core, "_call_provider", fake_call_provider)
+    results = core.search_all_providers("query", count=75)
+
+    assert len(results) == 75
+    assert sorted(requested_per_provider) == [50, 50]
+
+
+def test_search_result_count_normalization(monkeypatch):
+    from services.search import providers
+
+    assert providers.normalize_result_count("120") == 120
+    assert providers.normalize_result_count(0) == 1
+    assert providers.normalize_result_count(999) == 200
+    assert providers.normalize_result_count("not-a-number") == 5
+
+
 def test_all_search_provider_dispatches_for_web_search(tmp_path, monkeypatch):
     from services.search import core
 

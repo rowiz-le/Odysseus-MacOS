@@ -486,6 +486,74 @@ def test_web_content_fetcher_blocks_dns_to_private(monkeypatch):
     assert content._public_http_url("https://example.test/path") is False
 
 
+def test_firecrawl_keys_are_scrubbed_from_public_settings():
+    from src.settings_scrub import scrub_settings
+
+    result = scrub_settings({
+        "firecrawl_api_keys": "fc-one,fc-two",
+        "search_result_count": 50,
+    })
+
+    assert result["firecrawl_api_keys"] == ""
+    assert result["search_result_count"] == 50
+
+
+def test_firecrawl_never_receives_private_urls(tmp_path, monkeypatch):
+    content = _load_search_content_for_test(
+        monkeypatch,
+        "services.search.content_under_test_firecrawl_private",
+    )
+    monkeypatch.setattr(content, "CONTENT_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(content, "get_setting", lambda key, default="": "fc-secret")
+
+    def fail_post(*args, **kwargs):
+        raise AssertionError("Firecrawl must not receive private URLs")
+
+    monkeypatch.setattr(content.httpx, "post", fail_post)
+    result = content.fetch_webpage_content("http://127.0.0.1:8000/private")
+
+    assert result["success"] is False
+
+
+def test_firecrawl_rotates_and_fails_over_keys(tmp_path, monkeypatch):
+    content = _load_search_content_for_test(
+        monkeypatch,
+        "services.search.content_under_test_firecrawl_rotation",
+    )
+    monkeypatch.setattr(content, "CONTENT_CACHE_DIR", tmp_path)
+    monkeypatch.setattr(content, "get_setting", lambda key, default="": "fc-one,fc-two")
+    monkeypatch.setattr(content, "_public_http_url", lambda url: True)
+    content._firecrawl_rotation_index = 0
+    auth_headers = []
+
+    class FakeResponse:
+        def __init__(self, status_code, payload):
+            self.status_code = status_code
+            self._payload = payload
+
+        def json(self):
+            return self._payload
+
+    def fake_post(url, headers, json, timeout):
+        auth_headers.append(headers["Authorization"])
+        if len(auth_headers) == 1:
+            return FakeResponse(429, {})
+        return FakeResponse(200, {
+            "success": True,
+            "data": {
+                "markdown": "Useful public content",
+                "metadata": {"title": "Example"},
+            },
+        })
+
+    monkeypatch.setattr(content.httpx, "post", fake_post)
+    result = content.fetch_webpage_content("https://example.com/research")
+
+    assert result["success"] is True
+    assert result["content"] == "Useful public content"
+    assert auth_headers == ["Bearer fc-one", "Bearer fc-two"]
+
+
 def test_mcp_config_listing_is_admin_gated():
     from routes import mcp_routes
 

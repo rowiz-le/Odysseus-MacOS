@@ -14,6 +14,24 @@ BOOTSTRAP_LOG="$LOG_DIR/bootstrap.log"
 mkdir -p "$SUPPORT_ROOT" "$LOG_DIR"
 exec >>"$BOOTSTRAP_LOG" 2>&1
 
+show_bootstrap_error() {
+  local message="$1"
+  /usr/bin/osascript - "$message" <<'APPLESCRIPT' >/dev/null 2>&1 || true
+on run argv
+  display dialog (item 1 of argv) buttons {"OK"} default button "OK" with icon stop
+end run
+APPLESCRIPT
+}
+
+on_bootstrap_error() {
+  local exit_code="$?"
+  local line_number="$1"
+  echo "bootstrap failed at line $line_number with exit code $exit_code"
+  show_bootstrap_error "Odysseus could not finish first-launch setup. Open ~/Library/Application Support/Odysseus/logs/bootstrap.log for details, then reopen the app."
+  exit "$exit_code"
+}
+trap 'on_bootstrap_error "$LINENO"' ERR
+
 echo "============================================================"
 echo "$(date) launching $APP_NAME"
 echo "bundle: $BUNDLE_DIR"
@@ -137,9 +155,46 @@ migrate_data_if_empty() {
 
 migrate_data_if_empty
 
-if [[ ! -x "$VENV_DIR/bin/python" ]]; then
-  echo "creating virtual environment"
-  "$PYTHON_BIN" -m venv "$VENV_DIR"
+venv_is_usable() {
+  [[ -d "$VENV_DIR" ]] || return 1
+  [[ -x "$VENV_DIR/bin/python" ]] || return 1
+  [[ -r "$VENV_DIR/pyvenv.cfg" && -w "$VENV_DIR/pyvenv.cfg" ]] || return 1
+  [[ -w "$VENV_DIR" ]] || return 1
+  "$VENV_DIR/bin/python" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+}
+
+rebuild_venv() {
+  local temp_venv="${VENV_DIR}.tmp.$$"
+  local backup_venv=""
+
+  rm -rf "$temp_venv"
+  if [[ -e "$VENV_DIR" ]]; then
+    backup_venv="${VENV_DIR}.broken.$(date +%s)"
+    echo "moving unusable virtual environment to: $backup_venv"
+    if ! mv "$VENV_DIR" "$backup_venv"; then
+      chmod -R u+rwX "$VENV_DIR" 2>/dev/null || true
+      mv "$VENV_DIR" "$backup_venv"
+    fi
+  fi
+
+  echo "creating virtual environment atomically"
+  "$PYTHON_BIN" -m venv "$temp_venv"
+  "$temp_venv/bin/python" - <<'PY'
+import sys
+raise SystemExit(0 if sys.version_info >= (3, 11) else 1)
+PY
+  mv "$temp_venv" "$VENV_DIR"
+
+  if [[ -n "$backup_venv" ]]; then
+    rm -rf "$backup_venv"
+  fi
+}
+
+if ! venv_is_usable; then
+  rebuild_venv
 fi
 
 "$VENV_DIR/bin/python" - <<'PY'
@@ -154,6 +209,11 @@ if [[ ! -f "$STAMP" ]] || [[ "$(cat "$STAMP")" != "$REQ_HASH" ]]; then
   "$VENV_DIR/bin/python" -m pip install --upgrade pip
   "$VENV_DIR/bin/python" -m pip install -r "$RUN_DIR/requirements.txt"
   printf '%s' "$REQ_HASH" > "$STAMP"
+fi
+
+if [[ "${ODYSSEUS_BOOTSTRAP_ONLY:-0}" == "1" ]]; then
+  echo "bootstrap-only validation completed"
+  exit 0
 fi
 
 export AUTH_ENABLED="${AUTH_ENABLED:-true}"

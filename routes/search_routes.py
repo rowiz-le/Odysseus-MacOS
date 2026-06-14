@@ -9,7 +9,11 @@ import time
 
 from services.search import get_search_config, comprehensive_web_search, PROVIDER_INFO
 from services.search.core import _call_provider, search_all_providers
-from services.search.providers import _get_provider_key, _get_search_instance
+from services.search.providers import (
+    _get_provider_key,
+    _get_search_instance,
+    normalize_result_count,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -90,21 +94,17 @@ def setup_search_routes(config) -> APIRouter:
         values = await _request_values(request)
         query = str(values.get("query") or values.get("q") or "").strip()
         provider = str(values.get("provider") or "").strip()
-        try:
-            count = int(values.get("count") or values.get("limit") or 10)
-        except Exception:
-            count = 10
+        count = normalize_result_count(values.get("count") or values.get("limit") or 10, default=10)
         if not query:
             return {"results": [], "provider": provider, "error": "query is required"}
         if provider not in PROVIDER_INFO or provider == "disabled":
             return {"results": [], "provider": provider, "error": "Unknown provider"}
         t0 = time.time()
         try:
-            limit = min(count, 20)
             results = (
-                search_all_providers(query, limit)
+                search_all_providers(query, count)
                 if provider == "all"
-                else _call_provider(provider, query, limit)
+                else _call_provider(provider, query, count)
             )
             elapsed = round(time.time() - t0, 2)
             return {"results": results, "provider": provider, "time": elapsed}

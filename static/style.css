@@ -34624,12 +34624,16 @@ html { scrollbar-color: color-mix(in srgb, var(--maison-brass) 55%, var(--maison
 
 .chat-history {
   --chat-max: 872px;
+  user-select: text !important;
+  -webkit-user-select: text !important;
   margin-bottom: 10px;
   padding-top: 24px;
   padding-bottom: 8px;
 }
 
 .msg {
+  user-select: text !important;
+  -webkit-user-select: text !important;
   border-radius: var(--radius-md);
   padding: 14px 16px;
   line-height: 1.58;

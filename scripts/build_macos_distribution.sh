@@ -96,7 +96,8 @@ rsync -a --delete \
   --include 'static/js/editor/build/***' \
   --exclude '.git/' \
   --exclude '.DS_Store' \
-  --exclude '.env' \
+  --include '.env.example' \
+  --exclude '.env*' \
   --exclude 'data/' \
   --exclude 'logs/' \
   --exclude '.venv/' \
@@ -111,6 +112,7 @@ rsync -a --delete \
   --exclude '__pycache__/' \
   --exclude 'src/cache/' \
   --exclude 'docs/FIX_REPORT_*.md' \
+  --exclude 'Antigravity_Changes_Report.md' \
   --exclude '*.pyc' \
   --exclude 'Deep-Live-Cam/' \
   --exclude 'Deep-Live-Cam.app/' \

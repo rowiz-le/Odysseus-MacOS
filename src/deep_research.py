@@ -96,7 +96,12 @@ report that answers the original question as completely as possible given all ev
 Remove redundancy, resolve contradictions, and maintain logical flow. \
 Keep source URLs as inline citations where relevant.
 
+CRITICAL REQUIREMENT:
+- You MUST write the updated report in the EXACT SAME LANGUAGE as the "**Original question**" above. For example, if the question is in Vietnamese, the entire report must be in Vietnamese.
+
 Write only the updated report — no preamble or meta-commentary.
+
+FINAL RULE: If the original question is NOT in English (e.g., Vietnamese), you MUST translate all English findings and write your response ENTIRELY in that language.
 """
 
 STOP_PROMPT = """\
@@ -129,6 +134,7 @@ Write a **long, detailed, comprehensive** research report answering this questio
 {report}
 
 Requirements:
+- You MUST write the entire report in the EXACT SAME LANGUAGE as the original "**Question**" above. (e.g., if the question is in Vietnamese, write the report entirely in Vietnamese).
 - Write at MINIMUM 1500 words — this should be a thorough, magazine-quality article
 - Use clear ## headings and ### subheadings to organize into logical sections
 - Each section should have multiple detailed paragraphs, not just bullet points
@@ -139,6 +145,8 @@ Requirements:
 - Add a brief executive summary at the top
 - End with a clear conclusion that directly answers the question
 - Write in an engaging, informative style — not dry or robotic
+
+FINAL CRITICAL RULE: You MUST translate all collected evidence into the language of the original "**Question**". If the Question is in Vietnamese, your ENTIRE REPORT must be in Vietnamese. Do NOT write in English unless the question is in English.
 """
 
 CATEGORY_PROMPTS = {
@@ -223,7 +231,9 @@ class DeepResearcher:
         self.extraction_timeout = min(3600, max(15, int(extraction_timeout or 90)))
         self.planning_timeout = min(3600, max(15, int(planning_timeout or 90)))
         self.query_timeout = min(3600, max(15, int(query_timeout or 120)))
-        self.extraction_concurrency = min(12, max(1, int(extraction_concurrency or 3)))
+        # Keep concurrency explicitly controlled by the research setting.
+        # Firecrawl keys should not silently change the workload.
+        self.extraction_concurrency = min(20, max(1, int(extraction_concurrency or 3)))
         self.min_rounds = min_rounds
         self.max_empty_rounds = max_empty_rounds
         self.synthesis_window = synthesis_window
