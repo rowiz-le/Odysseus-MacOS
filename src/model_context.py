@@ -8,7 +8,7 @@ Provides token estimation for context usage tracking.
 import logging
 import json
 import sys
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from urllib.parse import urlparse
 
@@ -267,6 +267,47 @@ KNOWN_CONTEXT_WINDOWS = {
 _context_cache: Dict[Tuple[str, str], int] = {}
 
 
+CONTEXT_METADATA_FIELDS = (
+    "context_length",
+    "context_window",
+    "max_context_length",
+    "max_input_tokens",
+    "input_token_limit",
+)
+
+
+def clear_context_cache(endpoint_url: str | None = None, model: str | None = None) -> None:
+    """Clear cached context-window lookups after model metadata changes."""
+    if endpoint_url is None and model is None:
+        _context_cache.clear()
+        return
+    for key in list(_context_cache.keys()):
+        key_url, key_model = key
+        if endpoint_url is not None and key_url != endpoint_url:
+            continue
+        if model is not None and key_model != model:
+            continue
+        _context_cache.pop(key, None)
+
+
+def metadata_context_length(metadata: Any) -> Optional[int]:
+    """Extract a positive context window from a model metadata item."""
+    if not isinstance(metadata, dict):
+        return None
+    for field in CONTEXT_METADATA_FIELDS:
+        value = metadata.get(field)
+        if isinstance(value, (int, float)) and value > 0:
+            return int(value)
+        if isinstance(value, str):
+            try:
+                parsed = int(value.strip())
+            except ValueError:
+                continue
+            if parsed > 0:
+                return parsed
+    return None
+
+
 def get_context_length(endpoint_url: str, model: str) -> int:
     """Get the context window size for a model.
 
@@ -311,6 +352,85 @@ def _lookup_known(model: str) -> Optional[int]:
             if best_key is None or len(key) > len(best_key):
                 best_key, best_ctx = key, ctx
     return best_ctx
+
+
+def context_window_hint(endpoint_url: str, model: str, metadata: Any = None) -> Dict[str, Any]:
+    """Return a user-facing context-window recommendation for one model."""
+    item = metadata if isinstance(metadata, dict) else {}
+    known = _apply_provider_context_limit(endpoint_url, model, _lookup_known(model))
+    max_context = None
+    for field in ("max_context_length", "max_model_len", "max_seq_len"):
+        value = item.get(field)
+        if isinstance(value, (int, float)) and value > 0:
+            max_context = int(value)
+            break
+    detected = None
+    if item.get("context_user_override"):
+        detected = metadata_context_length({"context_length": item.get("context_detected_length")})
+    if not detected:
+        detected = metadata_context_length(item) if not item.get("context_user_override") else None
+
+    if known:
+        suggested = known
+        source = "known"
+    elif max_context:
+        suggested = max_context
+        source = "server_max"
+    elif detected:
+        suggested = detected
+        source = "server"
+    else:
+        suggested = DEFAULT_CONTEXT
+        source = "fallback"
+
+    return {
+        "suggested_context_length": suggested,
+        "suggestion_source": source,
+        "known_context_length": known,
+        "detected_context_length": detected,
+        "max_context_length": max_context,
+    }
+
+
+def context_window_warnings(
+    endpoint_url: str,
+    model: str,
+    context_length: Optional[int],
+    metadata: Any = None,
+) -> list[Dict[str, str]]:
+    """Explain likely risks for a user-edited context window."""
+    if not context_length:
+        return [{"level": "warning", "message": "No context window is saved; Odysseus will fall back to auto-detection."}]
+    hint = context_window_hint(endpoint_url, model, metadata)
+    suggested = int(hint.get("suggested_context_length") or 0)
+    max_context = int(hint.get("max_context_length") or 0)
+    warnings: list[Dict[str, str]] = []
+    if context_length < 4096:
+        warnings.append({"level": "danger", "message": "Very small context windows can break normal chat history and tool output."})
+    if suggested:
+        if context_length > int(suggested * 1.05):
+            warnings.append({"level": "danger", "message": "Above the recommended context. The provider or server may reject long prompts."})
+        elif context_length < int(suggested * 0.5):
+            warnings.append({"level": "warning", "message": "Less than half of the recommended context. Compaction will trigger much earlier than needed."})
+        elif context_length < suggested:
+            warnings.append({"level": "info", "message": "Below the recommendation. This is safe, but Odysseus will compact earlier."})
+    if max_context and _is_local_endpoint(endpoint_url) and context_length > max_context:
+        warnings.append({"level": "warning", "message": "Above the local server's reported max. Restart the model server with a larger context if you want this to work."})
+    return warnings
+
+
+def describe_context_window(endpoint_url: str, model: str, metadata: Any = None) -> Dict[str, Any]:
+    """Build the context payload shown in Settings > Add Models."""
+    item = metadata if isinstance(metadata, dict) else {}
+    hint = context_window_hint(endpoint_url, model, item)
+    current = metadata_context_length(item) or hint["suggested_context_length"]
+    return {
+        **hint,
+        "context_length": current,
+        "context_user_override": bool(item.get("context_user_override")),
+        "context_source": item.get("context_source") or hint["suggestion_source"],
+        "warnings": context_window_warnings(endpoint_url, model, current, item),
+    }
 
 
 def _apply_provider_context_limit(

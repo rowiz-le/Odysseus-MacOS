@@ -15,6 +15,99 @@ let _recentlyAddedEpId = null;
 function el(id) { return document.getElementById(id); }
 function esc(s) { return uiModule.esc(s); }
 
+function _ctxNum(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? Math.round(n) : 0;
+}
+
+function _fmtContextWindow(value) {
+  const n = _ctxNum(value);
+  if (!n) return 'Auto';
+  if (n >= 1000000) {
+    const m = n / 1000000;
+    return `${Number.isInteger(m) ? m : m.toFixed(1)}M`;
+  }
+  if (n >= 1000) {
+    const k = n / 1000;
+    return `${Number.isInteger(k) ? k : k.toFixed(0)}K`;
+  }
+  return String(n);
+}
+
+function _contextSourceLabel(source) {
+  return ({
+    known: 'known model limit',
+    server: 'detected from server',
+    server_max: 'server max',
+    fallback: 'Odysseus fallback',
+    user: 'manual override',
+    suggested: 'suggested value',
+  })[source || ''] || 'auto';
+}
+
+function _contextTone(ctx) {
+  const warnings = (ctx && ctx.warnings) || [];
+  if (warnings.some(w => w.level === 'danger')) return 'danger';
+  if (warnings.some(w => w.level === 'warning')) return 'warning';
+  if (ctx && ctx.context_user_override) return 'manual';
+  return 'ok';
+}
+
+function _contextAdviceHtml(ctx) {
+  if (!ctx) return '<span>Auto-detect context window.</span>';
+  const suggested = _ctxNum(ctx.suggested_context_length);
+  const current = _ctxNum(ctx.context_length);
+  const source = _contextSourceLabel(ctx.suggestion_source);
+  const bits = [];
+  if (suggested) bits.push(`Suggested <b>${_fmtContextWindow(suggested)}</b> (${esc(source)})`);
+  if (ctx.context_user_override) bits.push('Manual override is active');
+  const warnings = ctx.warnings || [];
+  if (warnings.length) {
+    bits.push(...warnings.map(w => `<span class="adm-context-warning ${esc(w.level)}">${esc(w.message)}</span>`));
+  } else if (current) {
+    bits.push('<span class="adm-context-warning ok">Looks reasonable for this model.</span>');
+  }
+  return bits.join('<br>');
+}
+
+function _liveContextAdvice(value, suggested, maxContext) {
+  const current = _ctxNum(value);
+  const sug = _ctxNum(suggested);
+  const max = _ctxNum(maxContext);
+  if (!current) return '<span class="adm-context-warning danger">Enter a number between 1,024 and 10,000,000.</span>';
+  const bits = [];
+  if (sug) bits.push(`Suggested <b>${_fmtContextWindow(sug)}</b>`);
+  if (current < 4096) bits.push('<span class="adm-context-warning danger">Too small for normal chat history.</span>');
+  if (sug && current > sug * 1.05) bits.push('<span class="adm-context-warning danger">Above recommendation; provider/server may reject long prompts.</span>');
+  else if (sug && current < sug * 0.5) bits.push('<span class="adm-context-warning warning">Less than half recommendation; compaction will happen early.</span>');
+  else if (sug && current < sug) bits.push('<span class="adm-context-warning info">Safe but lower than recommended.</span>');
+  if (max && current > max) bits.push('<span class="adm-context-warning warning">Above server-reported max; restart local server with larger context if needed.</span>');
+  if (bits.length <= (sug ? 1 : 0)) bits.push('<span class="adm-context-warning ok">Looks reasonable.</span>');
+  return bits.join('<br>');
+}
+
+function _renderContextEditor(model) {
+  const ctx = model.context || {};
+  const current = _ctxNum(ctx.context_length);
+  const suggested = _ctxNum(ctx.suggested_context_length);
+  const maxContext = _ctxNum(ctx.max_context_length);
+  const tone = _contextTone(ctx);
+  const title = `Current: ${current ? current.toLocaleString() : 'auto'} tokens. Suggested: ${suggested ? suggested.toLocaleString() : 'auto'} tokens.`;
+  return `<div class="adm-context-control" data-ctx-model="${esc(model.id)}" data-current="${current || ''}" data-suggested="${suggested || ''}" data-max="${maxContext || ''}">
+    <button type="button" class="adm-context-chip ${tone}" data-ctx-toggle title="${esc(title)}">Ctx ${esc(_fmtContextWindow(current || suggested))}</button>
+    <div class="adm-context-popover hidden" data-ctx-editor>
+      <div class="adm-context-title">Context window</div>
+      <input type="number" min="1024" max="10000000" step="1024" value="${current || ''}" data-ctx-input>
+      <div class="adm-context-actions">
+        ${suggested ? `<button type="button" class="admin-btn-sm" data-ctx-suggest>Use ${esc(_fmtContextWindow(suggested))}</button>` : ''}
+        <button type="button" class="admin-btn-sm" data-ctx-auto>Auto</button>
+        <button type="button" class="admin-btn-add" data-ctx-save>Save</button>
+      </div>
+      <div class="adm-context-hint" data-ctx-hint>${_contextAdviceHtml(ctx)}</div>
+    </div>
+  </div>`;
+}
+
 /* ═══════════════════════════════════════════
    USERS TAB
    ═══════════════════════════════════════════ */
@@ -476,11 +569,14 @@ async function loadEndpoints() {
                 <a href="#" data-ep-select-none="${epId}">None</a>
               </span>
             </div>${showSearch ? `<input type="search" class="mcp-tools-search" placeholder="Search ${models.length} models..." data-ep-search="${epId}">` : ''}<div class="mcp-tools-list">` + models.map(m =>
-              `<label title="${esc(m.id)}" data-ep-model-row data-search="${esc((m.display + ' ' + m.id).toLowerCase())}" class="adm-model-row">
-                <input type="checkbox" class="adm-cb-hidden" data-ep-model-id="${esc(m.id)}" ${!m.is_hidden ? 'checked' : ''}>
-                <span class="adm-check-dot" aria-hidden="true"></span>
-                <span>${esc(m.display)}</span>
-              </label>`
+              `<div title="${esc(m.id)}" data-ep-model-row data-search="${esc((m.display + ' ' + m.id).toLowerCase())}" class="adm-model-row">
+                <label class="adm-model-toggle">
+                  <input type="checkbox" class="adm-cb-hidden" data-ep-model-id="${esc(m.id)}" ${!m.is_hidden ? 'checked' : ''}>
+                  <span class="adm-check-dot" aria-hidden="true"></span>
+                  <span class="adm-model-name">${esc(m.display)}</span>
+                </label>
+                ${_renderContextEditor(m)}
+              </div>`
             ).join('') + '</div>';
             const filterRows = (q) => {
               const needle = q.trim().toLowerCase();
@@ -506,6 +602,7 @@ async function loadEndpoints() {
             panel.querySelectorAll('input[type=checkbox]').forEach(cb => {
               cb.addEventListener('change', () => _saveEpModelState(epId, panel));
             });
+            _wireContextEditors(epId, panel);
           } catch (e) { _stopSpin(); panel.innerHTML = '<span class="admin-error" style="font-size:11px;">Failed to load models</span>'; }
         }
       });
@@ -537,6 +634,102 @@ async function _saveEpModelState(epId, panel) {
       if (badge && !badge.classList.contains('admin-badge-off')) badge.textContent = `${total - hidden.length}/${total} models enabled`;
     }
   } catch (e) { /* silent */ }
+}
+
+function _refreshContextBox(box, ctx) {
+  if (!box || !ctx) return;
+  const current = _ctxNum(ctx.context_length);
+  const suggested = _ctxNum(ctx.suggested_context_length);
+  const maxContext = _ctxNum(ctx.max_context_length);
+  box.dataset.current = current || '';
+  box.dataset.suggested = suggested || '';
+  box.dataset.max = maxContext || '';
+  const chip = box.querySelector('[data-ctx-toggle]');
+  if (chip) {
+    chip.textContent = `Ctx ${_fmtContextWindow(current || suggested)}`;
+    chip.className = `adm-context-chip ${_contextTone(ctx)}`;
+    chip.title = `Current: ${current ? current.toLocaleString() : 'auto'} tokens. Suggested: ${suggested ? suggested.toLocaleString() : 'auto'} tokens.`;
+  }
+  const input = box.querySelector('[data-ctx-input]');
+  if (input) input.value = current || '';
+  const hint = box.querySelector('[data-ctx-hint]');
+  if (hint) hint.innerHTML = _contextAdviceHtml(ctx);
+}
+
+async function _saveModelContextWindow(epId, box, rawValue) {
+  const modelId = box.dataset.ctxModel;
+  const hint = box.querySelector('[data-ctx-hint]');
+  if (!modelId) return;
+  if (hint) hint.innerHTML = '<span>Saving context window...</span>';
+  try {
+    const res = await fetch(`/api/model-endpoints/${epId}/models`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ context_windows: { [modelId]: rawValue } }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      const msg = data.detail || data.message || 'Failed to save context window';
+      if (hint) hint.innerHTML = `<span class="adm-context-warning danger">${esc(msg)}</span>`;
+      return;
+    }
+    const ctx = data.context_updates && data.context_updates[modelId];
+    if (ctx) _refreshContextBox(box, ctx);
+    const editor = box.querySelector('[data-ctx-editor]');
+    if (editor) editor.classList.add('hidden');
+  } catch (err) {
+    if (hint) hint.innerHTML = `<span class="adm-context-warning danger">${esc(err.message || 'Request failed')}</span>`;
+  }
+}
+
+function _wireContextEditors(epId, panel) {
+  panel.querySelectorAll('[data-ctx-model]').forEach(box => {
+    const editor = box.querySelector('[data-ctx-editor]');
+    const input = box.querySelector('[data-ctx-input]');
+    const hint = box.querySelector('[data-ctx-hint]');
+    const suggested = () => _ctxNum(box.dataset.suggested);
+    const maxContext = () => _ctxNum(box.dataset.max);
+
+    box.querySelector('[data-ctx-toggle]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      panel.querySelectorAll('[data-ctx-editor]').forEach(pop => {
+        if (pop !== editor) pop.classList.add('hidden');
+      });
+      editor?.classList.toggle('hidden');
+      input?.focus();
+      input?.select();
+    });
+    input?.addEventListener('input', () => {
+      if (hint) hint.innerHTML = _liveContextAdvice(input.value, suggested(), maxContext());
+    });
+    box.querySelector('[data-ctx-suggest]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (input) input.value = suggested() || '';
+      if (hint) hint.innerHTML = _liveContextAdvice(input ? input.value : '', suggested(), maxContext());
+    });
+    box.querySelector('[data-ctx-auto]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _saveModelContextWindow(epId, box, null);
+    });
+    box.querySelector('[data-ctx-save]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      _saveModelContextWindow(epId, box, input ? input.value : '');
+    });
+    input?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        _saveModelContextWindow(epId, box, input.value);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        editor?.classList.add('hidden');
+      }
+    });
+  });
 }
 
 function initEndpointForm() {

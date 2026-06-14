@@ -59,6 +59,16 @@ def test_context_compaction_ui_does_not_report_reload_failures_as_compaction_fai
     assert "errorData.detail || errorData.message" in source
 
 
+def test_admin_model_rows_expose_context_window_editor():
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "static/js/admin.js").read_text(encoding="utf-8")
+
+    assert "adm-context-chip" in source
+    assert "context_windows" in source
+    assert "suggested_context_length" in source
+    assert "Above recommendation; provider/server may reject long prompts." in source
+
+
 class _FakeColumn:
     def __init__(self, name):
         self.name = name

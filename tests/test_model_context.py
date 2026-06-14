@@ -176,3 +176,39 @@ def test_generic_proxy_keeps_claude_opus_48_long_context():
         "claude-opus-4-8",
         1000000,
     ) == 1000000
+
+
+def test_context_description_suggests_known_limit_for_edit_ui():
+    info = model_context.describe_context_window(
+        "https://gateway.example/v1/chat/completions",
+        "claude-opus-4-8",
+        {},
+    )
+
+    assert info["context_length"] == 1000000
+    assert info["suggested_context_length"] == 1000000
+    assert info["suggestion_source"] == "known"
+    assert info["warnings"] == []
+
+
+def test_context_description_warns_for_too_low_manual_override():
+    info = model_context.describe_context_window(
+        "https://gateway.example/v1/chat/completions",
+        "claude-opus-4-8",
+        {"context_length": 200000, "context_user_override": True},
+    )
+
+    assert info["context_length"] == 200000
+    assert info["context_user_override"] is True
+    assert any(w["level"] == "warning" for w in info["warnings"])
+
+
+def test_context_cache_can_clear_one_model():
+    model_context._context_cache.clear()
+    model_context._context_cache[("https://a.example/v1/chat/completions", "m1")] = 1
+    model_context._context_cache[("https://a.example/v1/chat/completions", "m2")] = 2
+
+    model_context.clear_context_cache("https://a.example/v1/chat/completions", "m1")
+
+    assert ("https://a.example/v1/chat/completions", "m1") not in model_context._context_cache
+    assert model_context._context_cache[("https://a.example/v1/chat/completions", "m2")] == 2

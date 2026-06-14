@@ -3,11 +3,11 @@
 ![Odysseus macOS](docs/odysseus-macos-app.png)
 
 <p align="center">
-  <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.14.4/Odysseus-macOS-2026.06.14.4.dmg">
+  <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.14.5/Odysseus-macOS-2026.06.14.5.dmg">
     <img alt="Tải Odysseus macOS" src="https://img.shields.io/badge/T%E1%BA%A3i%20Odysseus%20macOS-DMG-ef7f8d?style=for-the-badge&logo=apple&logoColor=white">
   </a>
-  <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/tag/v2026.06.14.4">
-    <img alt="Release" src="https://img.shields.io/badge/Release-v2026.06.14.4-111111?style=for-the-badge">
+  <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/tag/v2026.06.14.5">
+    <img alt="Release" src="https://img.shields.io/badge/Release-v2026.06.14.5-111111?style=for-the-badge">
   </a>
 </p>
 
@@ -15,7 +15,7 @@
 thân thiện hơn, có app launcher riêng, chạy local-first, và có file `.dmg`
 kéo-thả để cài nhanh trên macOS.
 
-**Tải nhanh:** [Odysseus-macOS-2026.06.14.4.dmg](https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.14.4/Odysseus-macOS-2026.06.14.4.dmg)
+**Tải nhanh:** [Odysseus-macOS-2026.06.14.5.dmg](https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.14.5/Odysseus-macOS-2026.06.14.5.dmg)
 
 **Hướng dẫn sử dụng:** [docs/HUONG_DAN_SU_DUNG_VI.md](docs/HUONG_DAN_SU_DUNG_VI.md)
 
@@ -51,7 +51,7 @@ chạy trên máy của bạn, với dữ liệu của bạn, ưu tiên local-fi
 
 ## Giao diện hiện tại
 
-Các ảnh dưới đây được chụp trực tiếp từ **Odysseus macOS v2026.06.14.4**.
+Các ảnh dưới đây được chụp trực tiếp từ **Odysseus macOS v2026.06.14.5**.
 
 ### Chat & Agent
 

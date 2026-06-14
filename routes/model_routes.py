@@ -31,6 +31,11 @@ from src.endpoint_resolver import (
 )
 from src.auth_helpers import _auth_disabled, owner_filter
 from src.model_catalog import fetch_lm_studio_catalog, parse_standard_model_catalog
+from src.model_context import (
+    clear_context_cache,
+    describe_context_window,
+    metadata_context_length,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -469,6 +474,16 @@ def _parse_positive_int(raw: Any, *, minimum: int = 1, maximum: int = 86400) -> 
     if val < minimum:
         return None
     return min(val, maximum)
+
+
+def _parse_context_window_override(raw: Any) -> Optional[int]:
+    try:
+        value = int(str(raw).strip().replace(",", "").replace("_", ""))
+    except Exception:
+        return None
+    if value < 1024 or value > 10_000_000:
+        return None
+    return value
 
 
 def _explicit_model_list_timeout(base_url: str, endpoint_kind: str = "auto", requested: Any = None) -> float:
@@ -1889,16 +1904,20 @@ def setup_model_routes(model_discovery):
                     response.headers["X-Model-Refresh-Warning"] = "Model refresh failed or returned no models; kept cached models."
             pinned = _normalize_model_ids(getattr(ep, "pinned_models", None))
             pinned_set = set(pinned)
-            return [
-                {
+            metadata = _model_metadata(ep)
+            chat_url = build_chat_url(_normalize_base(ep.base_url))
+            result = []
+            for m in _merge_model_ids(all_models, pinned):
+                item_metadata = metadata.get(m, {})
+                result.append({
                     "id": m,
                     "display": m.split("/")[-1],
                     "is_hidden": m in hidden,
                     "is_pinned": m in pinned_set,
-                    "metadata": _model_metadata(ep).get(m, {}),
-                }
-                for m in _merge_model_ids(all_models, pinned)
-            ]
+                    "metadata": item_metadata,
+                    "context": describe_context_window(chat_url, m, item_metadata),
+                })
+            return result
         finally:
             db.close()
 
@@ -1907,7 +1926,11 @@ def setup_model_routes(model_discovery):
         """Bulk update hidden and/or pinned model lists for an endpoint.
 
         Expects JSON body with optional keys:
-          {"hidden": ["model-id-1", ...], "pinned_models": ["deploy-id", ...]}
+          {
+            "hidden": ["model-id-1", ...],
+            "pinned_models": ["deploy-id", ...],
+            "context_windows": {"model-id": 1000000}
+          }
         Each key is updated only when present, so callers can patch one list
         without clobbering the other.
         """
@@ -1929,11 +1952,68 @@ def setup_model_routes(model_discovery):
             if "pinned_models" in body or "pinned" in body:
                 pinned = _normalize_model_ids(body.get("pinned_models", body.get("pinned")))
                 ep.pinned_models = json.dumps(pinned) if pinned else None
+            context_updates: Dict[str, Any] = {}
+            if "context_windows" in body:
+                requested_windows = body.get("context_windows")
+                if not isinstance(requested_windows, dict):
+                    raise HTTPException(400, "context_windows must be an object mapping model IDs to token counts")
+                metadata = _model_metadata(ep)
+                chat_url = build_chat_url(_normalize_base(ep.base_url))
+                for raw_model_id, raw_value in requested_windows.items():
+                    model_id = str(raw_model_id or "").strip()
+                    if not model_id:
+                        continue
+                    item = dict(metadata.get(model_id) or {})
+                    item.setdefault("id", model_id)
+                    item.setdefault("display_name", model_id.split("/")[-1])
+                    reset_requested = (
+                        raw_value is None
+                        or (isinstance(raw_value, str) and raw_value.strip().lower() in {"", "auto", "reset", "default"})
+                    )
+                    if reset_requested:
+                        item.pop("context_user_override", None)
+                        item.pop("context_updated_at", None)
+                        restored = _parse_context_window_override(item.get("context_detected_length"))
+                        if restored:
+                            item["context_length"] = restored
+                            item["context_source"] = "server"
+                        else:
+                            item.pop("context_length", None)
+                            item.pop("context_window", None)
+                            item.pop("context_source", None)
+                            hint = describe_context_window(chat_url, model_id, item)
+                            suggested = _parse_context_window_override(hint.get("suggested_context_length"))
+                            if suggested:
+                                item["context_length"] = suggested
+                                item["context_source"] = hint.get("suggestion_source") or "suggested"
+                            else:
+                                item.pop("context_length", None)
+                                item.pop("context_source", None)
+                    else:
+                        context_window = _parse_context_window_override(raw_value)
+                        if context_window is None:
+                            raise HTTPException(400, f"Invalid context window for {model_id}: use 1,024 to 10,000,000 tokens")
+                        previous = metadata_context_length(item)
+                        if previous and not item.get("context_user_override"):
+                            item.setdefault("context_detected_length", previous)
+                        item["context_length"] = context_window
+                        item["context_source"] = "user"
+                        item["context_user_override"] = True
+                        item["context_updated_at"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
+                    metadata[model_id] = item
+                    clear_context_cache(chat_url, model_id)
+                    context_updates[model_id] = describe_context_window(chat_url, model_id, item)
+                ep.model_metadata = json.dumps(metadata) if metadata else None
             db.commit()
             _invalidate_models_cache()
             hidden_count = len(json.loads(ep.hidden_models)) if ep.hidden_models else 0
             pinned_count = len(json.loads(ep.pinned_models)) if ep.pinned_models else 0
-            return {"id": ep_id, "hidden_count": hidden_count, "pinned_count": pinned_count}
+            return {
+                "id": ep_id,
+                "hidden_count": hidden_count,
+                "pinned_count": pinned_count,
+                "context_updates": context_updates,
+            }
         finally:
             db.close()
 

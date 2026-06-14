@@ -24,6 +24,7 @@ from routes.model_routes import (
     _curate_models,
     _is_chat_model,
     _classify_endpoint,
+    _parse_context_window_override,
     _probe_endpoint,
     _unhide_catalog_models,
     _truthy,
@@ -217,6 +218,21 @@ def test_native_catalog_models_are_unhidden():
     )
     assert _unhide_catalog_models(endpoint, ["model-a"]) is True
     assert endpoint.hidden_models == '["old-embedding"]'
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("1,000,000", 1000000),
+        ("262144", 262144),
+        (1024, 1024),
+        (1023, None),
+        ("10000001", None),
+        ("not-a-number", None),
+    ],
+)
+def test_parse_context_window_override(raw, expected):
+    assert _parse_context_window_override(raw) == expected
 
 
 # ── setup probing ──

@@ -13149,6 +13149,31 @@ body:has(.doc-version-panel:not(.hidden)) .hamburger-btn {
 .mcp-tools-list label:hover {
   background: color-mix(in srgb, var(--fg) 5%, transparent);
 }
+.mcp-tools-list .adm-model-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 4px;
+  border-radius: 5px;
+  min-width: 0;
+  position: relative;
+}
+.mcp-tools-list .adm-model-row:hover {
+  background: color-mix(in srgb, var(--fg) 5%, transparent);
+}
+.mcp-tools-list .adm-model-toggle {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 4px 2px;
+}
+.adm-model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
 .mcp-tools-list input[type="checkbox"] {
   accent-color: var(--accent, var(--red));
   margin: 0;
@@ -13205,6 +13230,83 @@ body:has(.doc-version-panel:not(.hidden)) .hamburger-btn {
 .adm-cb-hidden:checked + .adm-check-dot::after {
   transform: translate(-50%, -50%) rotate(-45deg) scale(1);
 }
+.adm-context-control {
+  position: relative;
+  flex: 0 0 auto;
+}
+.adm-context-chip {
+  border: 1px solid color-mix(in srgb, var(--fg) 18%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--fg) 4%, transparent);
+  color: color-mix(in srgb, var(--fg) 72%, transparent);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 7px;
+  cursor: pointer;
+}
+.adm-context-chip.manual {
+  color: var(--accent, var(--red));
+  border-color: color-mix(in srgb, var(--accent, var(--red)) 45%, transparent);
+  background: color-mix(in srgb, var(--accent, var(--red)) 10%, transparent);
+}
+.adm-context-chip.warning {
+  color: #d1a85f;
+  border-color: rgba(209,168,95,.45);
+  background: rgba(209,168,95,.12);
+}
+.adm-context-chip.danger {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 50%, transparent);
+  background: color-mix(in srgb, var(--red) 12%, transparent);
+}
+.adm-context-popover {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  width: min(260px, 70vw);
+  z-index: 30;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--panel) 96%, #000);
+  box-shadow: 0 18px 45px rgba(0,0,0,.38);
+}
+.adm-context-title {
+  font-size: 10px;
+  font-weight: 800;
+  opacity: .65;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 6px;
+}
+.adm-context-popover input {
+  width: 100%;
+  box-sizing: border-box;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--fg);
+  padding: 7px 8px;
+  font-size: 12px;
+}
+.adm-context-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-top: 8px;
+}
+.adm-context-hint {
+  margin-top: 8px;
+  font-size: 10.5px;
+  line-height: 1.45;
+  color: color-mix(in srgb, var(--fg) 68%, transparent);
+}
+.adm-context-warning.ok { color: color-mix(in srgb, #7dd87d 80%, var(--fg)); }
+.adm-context-warning.info { color: color-mix(in srgb, #8fb7ff 80%, var(--fg)); }
+.adm-context-warning.warning { color: #d1a85f; }
+.adm-context-warning.danger { color: var(--red); }
 /* Disabled endpoints — dim the row but keep the toggle/delete buttons
    at full opacity so the user can re-enable or remove without squinting. */
 .admin-user-row.admin-ep-disabled { opacity: 0.55; }
