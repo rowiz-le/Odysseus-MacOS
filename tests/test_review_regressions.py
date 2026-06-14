@@ -38,6 +38,18 @@ def test_macos_about_panel_credits_original_and_remake_authors():
     assert "Original project by PewDiePie · Reimagined for macOS by Rowiz Lê" in app_source
 
 
+def test_macos_launcher_keeps_downloads_and_navigation_inside_the_app():
+    repo = Path(__file__).resolve().parent.parent
+    launcher_source = (repo / "odysseus_desktop_launcher.py").read_text(encoding="utf-8")
+
+    assert 'webview.settings["ALLOW_DOWNLOADS"] = True' in launcher_source
+    assert "window.events.loaded += lambda: _install_desktop_navigation_guard(window)" in launcher_source
+    assert "window.run_js(_DESKTOP_NAVIGATION_GUARD_JS)" in launcher_source
+    assert "back.id = 'odysseus-desktop-back'" in launcher_source
+    assert 'MenuAction("Back to Odysseus", back_to_odysseus)' in launcher_source
+    assert 'MenuAction("Odysseus Home", open_odysseus_home)' in launcher_source
+
+
 class _FakeColumn:
     def __init__(self, name):
         self.name = name

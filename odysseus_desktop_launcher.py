@@ -36,6 +36,57 @@ _ABOUT_PANEL_CONTROLLER = None
 _LA_CONTEXT_CLASS = None
 _TOUCH_ID_POLICY = 1
 _TOUCH_ID_BIOMETRY_TYPE = 1
+_DESKTOP_NAVIGATION_GUARD_JS = r"""
+(() => {
+  const rootPath = location.pathname === '/' || location.pathname === '';
+  const appShell = document.getElementById('sidebar')
+    || document.getElementById('message')
+    || document.getElementById('chat-history');
+  const pageHasBack = document.getElementById('btn-back')
+    || document.getElementById('odysseus-desktop-back');
+  if (rootPath || appShell || pageHasBack || !document.body) return;
+
+  const back = document.createElement('button');
+  back.id = 'odysseus-desktop-back';
+  back.type = 'button';
+  back.textContent = '\u2190 Back to Odysseus';
+  back.setAttribute('aria-label', 'Back to Odysseus');
+  back.style.cssText = [
+    'position:fixed',
+    'top:14px',
+    'left:14px',
+    'z-index:2147483647',
+    'padding:8px 12px',
+    'border:1px solid rgba(120,102,79,.38)',
+    'border-radius:9px',
+    'background:rgba(250,247,241,.94)',
+    'color:#241f1a',
+    'font:600 13px -apple-system,BlinkMacSystemFont,sans-serif',
+    'box-shadow:0 6px 22px rgba(0,0,0,.16)',
+    'backdrop-filter:blur(14px)',
+    'cursor:pointer'
+  ].join(';');
+
+  const goBack = () => {
+    if (history.length > 1) history.back();
+    else location.assign('/');
+  };
+  back.addEventListener('click', goBack);
+  document.body.appendChild(back);
+
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || event.defaultPrevented) return;
+    const target = event.target;
+    if (target && (
+      target.tagName === 'INPUT'
+      || target.tagName === 'TEXTAREA'
+      || target.isContentEditable
+    )) return;
+    event.preventDefault();
+    goBack();
+  });
+})();
+"""
 
 
 def _app_version() -> str:
@@ -176,6 +227,18 @@ def _install_macos_about_panel(window) -> None:
         AppHelper.callAfter(install)
     except Exception as exc:
         print(f"Unable to install macOS About panel: {exc}", file=sys.stderr)
+
+
+def _install_desktop_navigation_guard(window) -> None:
+    """Keep a return path available on downloads and standalone local pages."""
+    if window is None:
+        return
+    try:
+        # run_js executes directly in WKWebView. evaluate_js wraps the script in
+        # JavaScript eval(), which Odysseus' CSP correctly blocks.
+        window.run_js(_DESKTOP_NAVIGATION_GUARD_JS)
+    except Exception as exc:
+        print(f"Unable to install desktop navigation guard: {exc}", file=sys.stderr)
 
 
 def _local_auth_context_class():
@@ -445,6 +508,36 @@ def main() -> None:
         except KeyboardInterrupt:
             return
 
+    # WKWebView otherwise treats blob-backed links as navigations. Enabling
+    # pywebview's download delegate gives every export surface a native Save
+    # dialog and keeps the Odysseus window on the current page.
+    webview.settings["ALLOW_DOWNLOADS"] = True
+
+    from webview.menu import Menu, MenuAction
+
+    window_ref = {}
+
+    def back_to_odysseus() -> None:
+        window = window_ref.get("window")
+        if window is None:
+            return
+        window.run_js(
+            "if (history.length > 1) history.back(); else location.assign('/');"
+        )
+
+    def open_odysseus_home() -> None:
+        window = window_ref.get("window")
+        if window is not None:
+            window.run_js("location.assign('/');")
+
+    navigation_menu = Menu(
+        "Navigate",
+        [
+            MenuAction("Back to Odysseus", back_to_odysseus),
+            MenuAction("Odysseus Home", open_odysseus_home),
+        ],
+    )
+
     icon_path = _configure_macos_app_metadata()
     window = webview.create_window(
         title=APP_NAME,
@@ -455,7 +548,11 @@ def main() -> None:
         min_size=(1040, 720),
         background_color="#0c0b0a",
         text_select=True,
+        menu=[navigation_menu],
     )
+    window_ref["window"] = window
+    if window is not None:
+        window.events.loaded += lambda: _install_desktop_navigation_guard(window)
     webview.start(
         func=_install_macos_about_panel,
         args=(window,),
