@@ -5,6 +5,7 @@ import * as jobs from './jobs.js';
 import themeModule from '../theme.js';
 import createResearchSynapse from '../researchSynapse.js';
 import spinnerModule from '../spinner.js';
+import { openResearchReport } from '../researchReport.js';
 
 // jobId -> { synapse, status } — survives across _renderJobs() rebuilds so
 // the SVG keeps its accumulated nodes/edges between progress events.
@@ -52,6 +53,7 @@ function _saveSettingsToStorage() {
     localStorage.setItem(_SETTINGS_KEY, JSON.stringify({
       max_rounds: document.getElementById('research-rounds')?.value || '0',
       search_provider: document.getElementById('research-search-provider')?.value || '',
+      context_scope: document.getElementById('research-context-scope')?.value || '',
       endpoint_id: document.getElementById('research-endpoint')?.value || '',
       model: document.getElementById('research-model')?.value || '',
       category: activeCat?.dataset.cat || '',
@@ -322,9 +324,18 @@ export function closePanel() {
 }
 
 function _buildPanelHTML() {
-  const searchProviders = ['', 'searxng', 'duckduckgo', 'tavily', 'brave', 'google', 'serper'];
-  const providerOpts = searchProviders.map(p =>
-    `<option value="${p}">${p || 'Default'}</option>`
+  const searchProviders = [
+    ['', 'Default'],
+    ['all', 'All available engines'],
+    ['searxng', 'SearXNG'],
+    ['duckduckgo', 'DuckDuckGo'],
+    ['tavily', 'Tavily'],
+    ['brave', 'Brave'],
+    ['google_pse', 'Google PSE'],
+    ['serper', 'Serper'],
+  ];
+  const providerOpts = searchProviders.map(([value, label]) =>
+    `<option value="${value}">${label}</option>`
   ).join('');
 
   let roundOpts = '<option value="0" selected>Auto</option>';
@@ -372,6 +383,15 @@ function _buildPanelHTML() {
           <label class="research-setting">
             <span class="research-setting-label">Search engine</span>
             <select id="research-search-provider">${providerOpts}</select>
+          </label>
+          <label class="research-setting">
+            <span class="research-setting-label">Context</span>
+            <select id="research-context-scope">
+              <option value="" selected>Default</option>
+              <option value="web">Web only</option>
+              <option value="odysseus">Odysseus data</option>
+              <option value="all_allowed">Odysseus + allowed folders</option>
+            </select>
           </label>
           <label class="research-setting">
             <span class="research-setting-label">Endpoint</span>
@@ -469,6 +489,7 @@ function _readSettings() {
   const settings = {
     max_rounds: parseInt(document.getElementById('research-rounds')?.value || '0', 10),
     search_provider: document.getElementById('research-search-provider')?.value || undefined,
+    context_scope: document.getElementById('research-context-scope')?.value || undefined,
     endpoint_id: document.getElementById('research-endpoint')?.value || undefined,
     model: document.getElementById('research-model')?.value || undefined,
     category: category || undefined,
@@ -513,6 +534,8 @@ function _editJob(job) {
   if (roundsEl && s.max_rounds) roundsEl.value = s.max_rounds;
   const spEl = document.getElementById('research-search-provider');
   if (spEl && s.search_provider) spEl.value = s.search_provider;
+  const contextEl = document.getElementById('research-context-scope');
+  if (contextEl && s.context_scope) contextEl.value = s.context_scope;
   const epEl = document.getElementById('research-endpoint');
   if (epEl && s.endpoint_id) epEl.value = s.endpoint_id;
   const mEl = document.getElementById('research-model');
@@ -601,6 +624,8 @@ function _restoreSavedSettings() {
   // Users can pick a specific cap each time if needed.
   const search = document.getElementById('research-search-provider');
   if (search && saved.search_provider !== undefined) search.value = saved.search_provider;
+  const context = document.getElementById('research-context-scope');
+  if (context && saved.context_scope) context.value = saved.context_scope;
   const ep = document.getElementById('research-endpoint');
   if (ep && saved.endpoint_id) {
     ep.value = saved.endpoint_id;
@@ -1003,7 +1028,7 @@ function _buildJobCard(job) {
     // stopPropagation) opens the visual report — same as the Visual Report btn.
     card.style.cursor = 'pointer';
     card.addEventListener('click', () => {
-      window.open(`${_apiBase}/api/research/report/${job.id}`, '_blank');
+      openResearchReport(`${_apiBase}/api/research/report/${job.id}`);
     });
     card.querySelector('[data-action="copy"]').addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -1013,7 +1038,7 @@ function _buildJobCard(job) {
     });
     card.querySelector('[data-action="report"]').addEventListener('click', (e) => {
       e.stopPropagation();
-      window.open(`${_apiBase}/api/research/report/${job.id}`, '_blank');
+      openResearchReport(`${_apiBase}/api/research/report/${job.id}`);
     });
     card.querySelector('[data-action="chat"]').addEventListener('click', (e) => {
       e.stopPropagation();

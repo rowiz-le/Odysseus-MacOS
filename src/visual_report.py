@@ -863,6 +863,10 @@ body::after {{
 
 <!-- Toolbar: Export, export-folder access, and hidden-image restore -->
 <div class="toolbar">
+  <button id="btn-back" type="button" title="Back to Odysseus">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+    Back to Odysseus
+  </button>
   {restore_btn_html}
   <button id="btn-open-folder" type="button" title="Open the folder containing exported reports">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h5l2 2h11v10H3z"/><path d="M3 7V5h6l2 2"/></svg>
@@ -917,10 +921,36 @@ body::after {{
 
 <script>
 (function() {{
-  // ESC closes the report tab. window.close() works when the tab was
-  // opened via window.open() (which is how the panel launches it). If the
-  // browser blocks self-close (rare — e.g. report opened by direct URL),
-  // fall back to history.back() so ESC still feels responsive.
+  var __sessionId = {session_id_js};
+  // Unused scraped images — the reroll pool. Each is used at most once.
+  var __spareImages = {spare_images_js};
+
+  function returnToOdysseus() {{
+    var sameOriginReferrer = false;
+    try {{
+      sameOriginReferrer = !!document.referrer
+        && new URL(document.referrer).origin === window.location.origin;
+    }} catch (err) {{}}
+
+    if (sameOriginReferrer && window.history.length > 1) {{
+      window.history.back();
+      return;
+    }}
+
+    if (window.opener && !window.opener.closed) {{
+      try {{
+        window.opener.focus();
+        window.close();
+        return;
+      }} catch (err) {{}}
+    }}
+
+    window.location.assign('/');
+  }}
+
+  document.getElementById('btn-back').addEventListener('click', returnToOdysseus);
+
+  // ESC follows the same reliable return path as the visible back button.
   document.addEventListener('keydown', function(e) {{
     if (e.key !== 'Escape' || e.defaultPrevented) return;
     // Don't hijack ESC while typing in a field or with an open dropdown.
@@ -928,10 +958,7 @@ body::after {{
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
     var menu = document.getElementById('export-menu');
     if (menu && menu.classList.contains('open')) {{ menu.classList.remove('open'); return; }}
-    try {{ window.close(); }} catch (err) {{}}
-    // window.close() is a no-op when the tab wasn't script-opened; in that
-    // case fall back to navigation so the key isn't ignored.
-    setTimeout(function() {{ if (!window.closed) history.back(); }}, 50);
+    returnToOdysseus();
   }});
 
   // Export dropdown toggle
@@ -957,15 +984,47 @@ body::after {{
     setTimeout(function() {{ toast.classList.remove('show'); }}, 2200);
   }}
 
-  function downloadExport(format) {{
+  function exportFilenameFromResponse(response, format) {{
+    var disposition = response.headers.get('Content-Disposition') || '';
+    var encoded = disposition.match(/filename\\*=UTF-8''([^;]+)/i);
+    var plain = disposition.match(/filename="?([^";]+)"?/i);
+    var filename = (encoded && encoded[1]) || (plain && plain[1]) || '';
+    try {{
+      if (filename) filename = decodeURIComponent(filename);
+    }} catch (err) {{}}
+    if (filename) return filename;
+    var suffix = format === 'markdown' ? 'md' : (format || 'html');
+    return 'deep-research-report.' + suffix;
+  }}
+
+  async function downloadExport(format) {{
     if (!__sessionId) return;
-    var a = document.createElement('a');
-    a.href = '/api/research/export/' + encodeURIComponent(__sessionId)
+    var url = '/api/research/export/' + encodeURIComponent(__sessionId)
       + '?format=' + encodeURIComponent(format);
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    showToolbarToast('Export saved to the reports folder');
+    showToolbarToast('Preparing export...');
+    try {{
+      var response = await fetch(url, {{ credentials: 'same-origin' }});
+      if (!response.ok) {{
+        var detail = '';
+        try {{ detail = await response.text(); }} catch (err) {{}}
+        throw new Error(detail || ('HTTP ' + response.status));
+      }}
+      var blob = await response.blob();
+      var objectUrl = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = objectUrl;
+      a.download = exportFilenameFromResponse(response, format);
+      a.rel = 'noopener';
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function() {{ URL.revokeObjectURL(objectUrl); }}, 2000);
+      showToolbarToast('Export saved to the reports folder');
+    }} catch (err) {{
+      console.error('Report export failed', err);
+      showToolbarToast('Export failed. Try Open folder or reload.');
+    }}
   }}
 
   document.querySelectorAll('[data-export-format]').forEach(function(btn) {{
@@ -996,10 +1055,6 @@ body::after {{
   // future renders of this report skip the URL. Falls back to a silent
   // no-op if there's no session_id (e.g. the report was opened from a
   // saved-HTML download where the backend isn't reachable).
-  var __sessionId = {session_id_js};
-  // Unused scraped images — the reroll pool. Each is used at most once.
-  var __spareImages = {spare_images_js};
-
   // Persist a rejected URL so future renders skip it.
   function __persistHide(url) {{
     if (!__sessionId || !url) return;

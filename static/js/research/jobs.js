@@ -200,6 +200,9 @@ export function formatPhase(progress, maxRounds) {
   const rn = p.round ? (maxRounds ? `Round ${p.round}/${maxRounds}: ` : `Round ${p.round}: `) : '';
   switch (p.phase) {
     case 'probing': return 'Probing model...';
+    case 'context': return p.scope === 'all_allowed'
+      ? 'Reading Odysseus data and allowed folders...'
+      : (p.scope === 'odysseus' ? 'Reading Odysseus context...' : 'Preparing web research...');
     case 'planning': return 'Planning research strategy...';
     case 'searching': return `${rn}Searching (${p.queries || 0} queries)`;
     case 'reading': return `${rn}Reading ${p.total_sources || 0} sources`;

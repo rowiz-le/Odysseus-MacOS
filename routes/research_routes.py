@@ -10,6 +10,7 @@ import subprocess
 import sys
 import unicodedata
 import uuid
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,17 @@ _PROXY_FWD_HEADERS = (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class BulkResearchExportRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    format: str = "html"
+
+
+class AttachResearchRequest(BaseModel):
+    ids: list[str] = Field(default_factory=list)
+    session_id: str
+
 
 # Model-name substrings that are NOT chat/generation models — research must
 # never pick these as its model. An OpenAI-style endpoint often lists
@@ -54,6 +66,39 @@ def _research_export_stem(query: str, session_id: str) -> str:
     ascii_text = normalized.encode("ascii", "ignore").decode("ascii")
     slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_text).strip("-").lower()
     return f"{(slug[:72] or 'deep-research')}-{session_id}"
+
+
+def _research_export_content(research_handler, data: dict, session_id: str, export_format: str):
+    """Return UTF-8 export content, suffix, and media type for one report."""
+    export_format = (export_format or "html").strip().lower()
+    if export_format == "html":
+        content = research_handler.get_report_html(session_id)
+        if content is None:
+            raise HTTPException(404, "No visual report available for this session")
+        return content, ".html", "text/html; charset=utf-8"
+    if export_format in {"markdown", "md"}:
+        return (
+            data.get("raw_report") or data.get("result", ""),
+            ".md",
+            "text/markdown; charset=utf-8",
+        )
+    if export_format == "json":
+        content = json.dumps(
+            {
+                "id": session_id,
+                "query": data.get("query", ""),
+                "report": data.get("raw_report") or data.get("result", ""),
+                "sources": data.get("sources") or [],
+                "stats": data.get("stats") or {},
+                "category": data.get("category") or "",
+                "started_at": data.get("started_at", 0),
+                "completed_at": data.get("completed_at", 0),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+        return content, ".json", "application/json"
+    raise HTTPException(400, "Unsupported export format")
 
 
 def _is_direct_desktop_request(request: Request) -> bool:
@@ -254,37 +299,10 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
         except Exception as exc:
             raise HTTPException(500, f"Failed to read research: {exc}")
 
-        export_format = (format or "html").strip().lower()
         stem = _research_export_stem(data.get("query", ""), session_id)
-        if export_format == "html":
-            content = research_handler.get_report_html(session_id)
-            if content is None:
-                raise HTTPException(404, "No visual report available for this session")
-            suffix = ".html"
-            media_type = "text/html; charset=utf-8"
-        elif export_format in {"markdown", "md"}:
-            content = data.get("raw_report") or data.get("result", "")
-            suffix = ".md"
-            media_type = "text/markdown; charset=utf-8"
-        elif export_format == "json":
-            content = json.dumps(
-                {
-                    "id": session_id,
-                    "query": data.get("query", ""),
-                    "report": data.get("raw_report") or data.get("result", ""),
-                    "sources": data.get("sources") or [],
-                    "stats": data.get("stats") or {},
-                    "category": data.get("category") or "",
-                    "started_at": data.get("started_at", 0),
-                    "completed_at": data.get("completed_at", 0),
-                },
-                ensure_ascii=False,
-                indent=2,
-            )
-            suffix = ".json"
-            media_type = "application/json"
-        else:
-            raise HTTPException(400, "Unsupported export format")
+        content, suffix, media_type = _research_export_content(
+            research_handler, data, session_id, format
+        )
 
         _RESEARCH_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
         export_path = _RESEARCH_EXPORT_DIR / f"{stem}{suffix}"
@@ -294,6 +312,108 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
             media_type=media_type,
             filename=export_path.name,
         )
+
+    @router.post("/api/research/export-bulk")
+    async def research_export_bulk(request: Request, body: BulkResearchExportRequest):
+        """Export multiple owned reports as one ZIP and retain the files locally."""
+        user = _require_user(request)
+        ids = list(dict.fromkeys(body.ids or []))
+        if not ids:
+            raise HTTPException(400, "Select at least one research report")
+        if len(ids) > 50:
+            raise HTTPException(400, "A maximum of 50 reports can be exported at once")
+
+        _RESEARCH_EXPORT_DIR.mkdir(parents=True, exist_ok=True)
+        prepared = []
+        for session_id in ids:
+            _validate_session_id(session_id)
+            _assert_owns_research(session_id, user)
+            data_path = _RESEARCH_DATA_DIR / f"{session_id}.json"
+            try:
+                data = json.loads(data_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise HTTPException(500, f"Failed to read research: {exc}")
+            content, suffix, _media_type = _research_export_content(
+                research_handler, data, session_id, body.format
+            )
+            filename = f"{_research_export_stem(data.get('query', ''), session_id)}{suffix}"
+            prepared.append((filename, content))
+
+        timestamp = datetime.utcnow().strftime("%Y%m%d-%H%M%S-%f")
+        zip_path = _RESEARCH_EXPORT_DIR / f"deep-research-{timestamp}-{len(prepared)}-reports.zip"
+        with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for filename, content in prepared:
+                export_path = _RESEARCH_EXPORT_DIR / filename
+                export_path.write_text(content, encoding="utf-8")
+                archive.writestr(filename, content.encode("utf-8"))
+
+        return FileResponse(
+            zip_path,
+            media_type="application/zip",
+            filename=zip_path.name,
+        )
+
+    @router.post("/api/research/attach-to-chat")
+    async def research_attach_to_chat(request: Request, body: AttachResearchRequest):
+        """Attach multiple completed reports as persistent context in an owned chat."""
+        user = _require_user(request)
+        ids = list(dict.fromkeys(body.ids or []))
+        if not ids:
+            raise HTTPException(400, "Select at least one research report")
+        if len(ids) > 20:
+            raise HTTPException(400, "A maximum of 20 reports can be attached at once")
+        _validate_session_id(body.session_id)
+        if session_manager is None:
+            raise HTTPException(500, "session_manager not configured")
+        try:
+            chat_session = session_manager.get_session(body.session_id)
+        except KeyError:
+            raise HTTPException(404, "Chat session not found")
+        if user and getattr(chat_session, "owner", None) != user:
+            raise HTTPException(404, "Chat session not found")
+
+        sections = []
+        titles = []
+        for index, session_id in enumerate(ids, start=1):
+            _validate_session_id(session_id)
+            _assert_owns_research(session_id, user)
+            data_path = _RESEARCH_DATA_DIR / f"{session_id}.json"
+            try:
+                data = json.loads(data_path.read_text(encoding="utf-8"))
+            except Exception as exc:
+                raise HTTPException(500, f"Failed to read research: {exc}")
+            query = (data.get("query") or "Untitled research").strip()
+            report = (data.get("raw_report") or data.get("result") or "").strip()
+            if not report:
+                raise HTTPException(400, f"Research report {session_id} is empty")
+            titles.append(query)
+            sections.append(
+                f"=== DEEP RESEARCH {index} OF {len(ids)} ===\n"
+                f"Report ID: {session_id}\n"
+                f"Original query: {query}\n\n"
+                f"{report}"
+            )
+
+        from core.models import ChatMessage
+        from src.prompt_security import untrusted_context_message
+
+        context = untrusted_context_message(
+            "selected Deep Research reports",
+            "\n\n".join(sections),
+        )
+        metadata = dict(context.get("metadata") or {})
+        metadata.update({
+            "hidden": True,
+            "research_attachments": ids,
+            "research_attachment_titles": titles,
+        })
+        chat_session.add_message(ChatMessage(
+            role=context["role"],
+            content=context["content"],
+            metadata=metadata,
+        ))
+        session_manager.save_sessions()
+        return {"ok": True, "attached": len(ids), "titles": titles}
 
     @router.post("/api/research/open-export-folder")
     async def research_open_export_folder(request: Request):
@@ -458,6 +578,7 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
         # max_rounds=0 means "Auto" — let the AI decide when to stop, capped at 20.
         max_rounds: int = Field(default=0, ge=0, le=20)
         search_provider: Optional[str] = None
+        context_scope: Optional[str] = None
         endpoint_id: Optional[str] = None
         model: Optional[str] = None
         max_time: int = Field(default=300, ge=60, le=1800)
@@ -568,6 +689,7 @@ def setup_research_routes(research_handler, session_manager=None) -> APIRouter:
             extraction_timeout=body.extraction_timeout,
             extraction_concurrency=body.extraction_concurrency,
             owner=user,
+            context_scope=body.context_scope,
         )
         return {"session_id": session_id, "status": "running", "query": body.query}
 

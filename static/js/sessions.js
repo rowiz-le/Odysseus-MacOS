@@ -9,6 +9,7 @@ import { providerLogo } from './providers.js';
 import { initModelPicker, updateModelPicker } from './modelPicker.js?v=20260608fix4';
 import themeModule from './theme.js';
 import spinnerModule from './spinner.js';
+import { openResearchReport } from './researchReport.js';
 
 const API_BASE = window.location.origin;
 
@@ -1577,7 +1578,7 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
       const res = await fetch(`${API_BASE}/api/history/${id}`);
       const data = await res.json();
       if (navToken !== _sessionNavToken || currentSessionId !== id) return;
-      msgHistory = data.history || [];
+      msgHistory = (data.history || []).filter(msg => !msg?.metadata?.hidden);
       modelName = data.model || null;
       // The model returned by /api/history is the authoritative one the
       // backend will use for this session. Write it back into the cached
@@ -1659,11 +1660,9 @@ export async function selectSession(id, { keepSidebar = false } = {}) {
         window.hljs.highlightElement(block);
       });
     }
-    // Hide research button on session switch — it's only for the session that started it
-    var _rBtn = document.getElementById('research-toggle-btn');
-    var _rChk = document.getElementById('research-toggle');
-    if (_rBtn) _rBtn.style.display = 'none';
-    if (_rChk) _rChk.checked = false;
+    // Deep Research is one-shot, so switching sessions clears it but keeps
+    // the composer entry point available.
+    if (window._syncResearchIndicator) window._syncResearchIndicator(false);
 
     // Check for pending/completed research that survived a page refresh
     if (window.chatModule && window.chatModule.checkPendingResearch) {
@@ -2308,7 +2307,7 @@ async function _arcPeekOpen(sid) {
     // Load history directly without unarchiving
     const res = await fetch(`${API_BASE}/api/history/${sid}`);
     const data = await res.json();
-    const history = data.history || [];
+    const history = (data.history || []).filter(msg => !msg?.metadata?.hidden);
 
     // Set as current session so chat renders
     currentSessionId = sid;
@@ -2876,14 +2875,14 @@ async function _renderLibResearch(grid) {
       if (metaEl) metaEl.textContent = metaEl.textContent.replace(/\d+ msgs?/, (item.source_count || 0) + ' sources');
       card.addEventListener('click', (e) => {
         if (e.target.closest('.archive-menu-btn') || e.target.closest('.memory-select-cb')) return;
-        window.open(`${API_BASE}/api/research/report/${item.id}`, '_blank');
+        openResearchReport(`${API_BASE}/api/research/report/${item.id}`);
       });
       const menuBtn = card.querySelector('.archive-menu-btn');
       if (menuBtn) {
         menuBtn.addEventListener('click', (e) => {
           e.stopPropagation();
           _showDropdown(e.currentTarget, [
-            { label: 'Open Report', action: () => window.open(`${API_BASE}/api/research/report/${item.id}`, '_blank') },
+            { label: 'Open Report', action: () => openResearchReport(`${API_BASE}/api/research/report/${item.id}`) },
             { label: 'Re-run', action: () => {
               const modal = document.getElementById('library-modal');
               if (modal) modal.style.display = 'none';

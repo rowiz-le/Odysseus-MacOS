@@ -226,6 +226,7 @@ class ResearchHandler:
         extraction_timeout: int = None,
         extraction_concurrency: int = None,
         owner: str = "",
+        context_scope: str = None,
     ) -> dict:
         """Start research as a background task. Returns task info dict.
 
@@ -269,6 +270,7 @@ class ResearchHandler:
             "result": None,
             "started_at": time.time(),
             "category": category,
+            "context_scope": context_scope,
             # SECURITY: track ownership so all reads / saves can filter by user.
             "owner": owner or "",
         }
@@ -306,6 +308,8 @@ class ResearchHandler:
                         category=category,
                         extraction_timeout=extraction_timeout,
                         extraction_concurrency=extraction_concurrency,
+                        owner=owner,
+                        context_scope=context_scope,
                     ),
                     timeout=hard_timeout,
                 )
@@ -556,6 +560,8 @@ class ResearchHandler:
                 "completed_at": time.time(),
                 # SECURITY: stamp owner so route handlers can filter by user.
                 "owner": entry.get("owner", ""),
+                "context_scope": entry.get("context_scope") or "odysseus",
+                "context_stats": entry.get("context_stats") or {},
             }
             path.write_text(json.dumps(data), encoding="utf-8")
             logger.info(f"Research result saved to {path}")
@@ -675,6 +681,8 @@ class ResearchHandler:
         category: str = None,
         extraction_timeout: int = None,
         extraction_concurrency: int = None,
+        owner: str = "",
+        context_scope: str = None,
     ) -> str:
         """
         Run iterative deep research using the LLM-in-the-loop DeepResearcher.
@@ -709,6 +717,7 @@ class ResearchHandler:
             from src.deep_research import DeepResearcher
 
             from src.settings import get_setting
+            from src.research_context import collect_research_context, normalize_context_scope
             _max_report_tokens = int(get_setting("research_max_tokens", 16384))
             _extraction_timeout = _bounded_int(
                 extraction_timeout if extraction_timeout is not None else get_setting("research_extraction_timeout_seconds", 90),
@@ -734,6 +743,20 @@ class ResearchHandler:
                 minimum=15,
                 maximum=3600,
             )
+            _context_scope = normalize_context_scope(
+                context_scope or get_setting("research_context_scope", "odysseus")
+            )
+            if progress_callback:
+                progress_callback({"phase": "context", "scope": _context_scope})
+            local_context, context_stats = await asyncio.to_thread(
+                collect_research_context,
+                query,
+                owner or "",
+                _context_scope,
+            )
+            if _task_entry is not None:
+                _task_entry["context_scope"] = _context_scope
+                _task_entry["context_stats"] = context_stats
 
             researcher = DeepResearcher(
                 llm_endpoint=llm_endpoint,
@@ -750,6 +773,8 @@ class ResearchHandler:
                 progress_callback=progress_callback,
                 search_provider=search_provider,
                 category=category,
+                local_context=local_context,
+                context_stats=context_stats,
             )
             if _task_entry is not None:
                 _task_entry["researcher"] = researcher

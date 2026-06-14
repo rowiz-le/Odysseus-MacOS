@@ -9840,15 +9840,15 @@ textarea.memory-add-input {
   position: relative;
   top: -2px;
 }
-/* Research bulk bar — right-align the action buttons (keep All + count on
-   the left). Cancel now lives on the Select toggle, so Archive anchors. */
-#doclib-research-bulk #doclib-research-bulk-archive {
+/* Research bulk bar — keep selection info left and actions grouped right. */
+#doclib-research-bulk #doclib-research-bulk-attach {
   margin-left: auto;
 }
 #doclib-research-bulk .memory-toolbar-btn {
   position: relative;
   top: 3px;
-  right: 16px;
+  right: 4px;
+  padding-inline: 7px;
 }
 /* Archive bulk buttons — nudge down 1px to match research. */
 #doclib-arc-bulk .memory-toolbar-btn {

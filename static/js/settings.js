@@ -994,6 +994,7 @@ var _searchProviderHints = {
 };
 var _searchNeedsKey = { brave: 1, google_pse: 1, tavily: 1, serper: 1 };
 var _searchLabels = {
+  all: 'All available engines',
   searxng: 'SearXNG', duckduckgo: 'DuckDuckGo', brave: 'Brave Search',
   google_pse: 'Google PSE', tavily: 'Tavily', serper: 'Serper', disabled: 'Disabled',
 };
@@ -1386,9 +1387,12 @@ async function initResearchSettings() {
 /* ── Deep Research Search (Search tab) ── */
 async function initResearchSearchSettings() {
   var searchSel = el('set-researchSearch');
-  var msg = el('set-researchSearchMsg');
+  var contextSel = el('set-researchContext');
+  var msg = el('set-researchSearchMsg') || el('set-researchMsg');
+  if (!searchSel && !contextSel) return;
 
   function updateSearchOptions(settings) {
+    if (!searchSel) return;
     var options = searchSel.querySelectorAll('option');
     options.forEach(function(opt) {
       var prov = opt.value;
@@ -1409,7 +1413,8 @@ async function initResearchSearchSettings() {
   try {
     var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
     var settings = await res.json();
-    if (settings.research_search_provider) searchSel.value = settings.research_search_provider;
+    if (searchSel && settings.research_search_provider) searchSel.value = settings.research_search_provider;
+    if (contextSel) contextSel.value = settings.research_context_scope || 'odysseus';
     updateSearchOptions(settings);
   } catch (e) { console.warn('Failed to load research search settings', e); }
 
@@ -1417,14 +1422,22 @@ async function initResearchSearchSettings() {
     try {
       await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ research_search_provider: searchSel.value })
+        body: JSON.stringify({
+          research_search_provider: searchSel ? searchSel.value : '',
+          research_context_scope: contextSel ? contextSel.value : 'odysseus',
+        })
       });
-      msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
-      setTimeout(function() { msg.textContent = ''; }, 2000);
-    } catch (e) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
+      if (msg) {
+        msg.textContent = 'Saved'; msg.style.color = 'var(--fg)';
+        setTimeout(function() { msg.textContent = ''; }, 2000);
+      }
+    } catch (e) {
+      if (msg) { msg.textContent = 'Failed to save'; msg.style.color = 'var(--red)'; }
+    }
   }
 
-  searchSel.addEventListener('change', saveResearchSearch);
+  if (searchSel) searchSel.addEventListener('change', saveResearchSearch);
+  if (contextSel) contextSel.addEventListener('change', saveResearchSearch);
 }
 
 /* ── Agent Settings (AI tab) ── */

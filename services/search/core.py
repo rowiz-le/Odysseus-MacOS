@@ -95,6 +95,8 @@ def update_search_config(api_key: str = None, **kwargs):
 
 def _call_provider(provider_name: str, query: str, count: int, time_filter: str = None) -> List[dict]:
     """Call a search provider by name. Returns list of results or empty list."""
+    if provider_name == "google":
+        provider_name = "google_pse"
     if provider_name == "searxng":
         return searxng_search_api(query, count, time_filter=time_filter)
     elif provider_name == "brave":
@@ -108,6 +110,57 @@ def _call_provider(provider_name: str, query: str, count: int, time_filter: str 
     elif provider_name == "serper":
         return serper_search(query, count, time_filter)
     return []
+
+
+def search_all_providers(query: str, count: int = 10, time_filter: str = None) -> List[dict]:
+    """Query every configured provider concurrently and merge unique results."""
+    settings = _get_search_settings()
+    providers = ["searxng", "duckduckgo", "brave", "google_pse", "tavily", "serper"]
+    enabled = []
+    for provider in providers:
+        if provider in {"brave", "tavily", "serper"} and not _get_provider_key(provider):
+            continue
+        if provider == "google_pse" and (
+            not _get_provider_key(provider) or not (settings.get("google_pse_cx") or "").strip()
+        ):
+            continue
+        enabled.append(provider)
+
+    per_provider = max(3, min(8, count))
+    combined: List[dict] = []
+    with ThreadPoolExecutor(max_workers=max(1, len(enabled))) as executor:
+        futures = {
+            executor.submit(_call_provider, provider, query, per_provider, time_filter): provider
+            for provider in enabled
+        }
+        for future in as_completed(futures):
+            provider = futures[future]
+            try:
+                results = future.result() or []
+            except Exception as exc:
+                error_logger.warning(f"{provider} search failed in all-engines mode: {exc}")
+                continue
+            for result in results:
+                item = dict(result)
+                item["search_provider"] = provider
+                combined.append(item)
+
+    deduped = []
+    seen = set()
+    for result in combined:
+        url = (result.get("url") or "").strip()
+        if not url:
+            continue
+        try:
+            parsed = urlparse(url)
+            key = f"{parsed.netloc.lower()}{parsed.path.rstrip('/')}"
+        except Exception:
+            key = url
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(result)
+    return rank_search_results(query, deduped)[:max(count * 2, 12)]
 
 
 # If the self-hosted SearXNG instance is up but all enabled engines return

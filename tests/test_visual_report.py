@@ -21,8 +21,14 @@ def test_vietnamese_report_embeds_unicode_font_and_export_controls():
     assert 'data-export-format="html"' in report
     assert 'data-export-format="markdown"' in report
     assert 'data-export-format="json"' in report
+    assert 'id="btn-back"' in report
+    assert "Back to Odysseus" in report
     assert 'id="btn-open-folder"' in report
     assert "/api/research/open-export-folder" in report
+    assert "await fetch(url, { credentials: 'same-origin' })" in report
+    assert "URL.createObjectURL(blob)" in report
+    assert "a.download = exportFilenameFromResponse(response, format)" in report
+    assert "a.href = '/api/research/export/'" not in report
 
 
 def test_english_report_keeps_english_language_metadata():

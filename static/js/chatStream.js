@@ -24,11 +24,14 @@ export function handleUIControl(uiData) {
       };
       var btnMap = {
         web: 'web-toggle-btn', bash: 'bash-toggle-btn', rag: 'rag-indicator-btn',
+        research: 'research-toggle-btn',
       };
       var chkId = toggleMap[uiData.toggle_name];
       var btnId = btnMap[uiData.toggle_name];
       if (uiData.toggle_name === 'rag' && window._syncRagIndicator) {
         window._syncRagIndicator(!!uiData.state);
+      } else if (uiData.toggle_name === 'research' && window._syncResearchIndicator) {
+        window._syncResearchIndicator(!!uiData.state);
       } else {
         if (chkId) {
           var chk = document.getElementById(chkId);

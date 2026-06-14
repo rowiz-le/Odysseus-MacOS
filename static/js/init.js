@@ -54,6 +54,7 @@ window.addEventListener('pageshow', clearFreshComposerRestore);
       const hideOn = (selector, allowed) => {
         if (allowed === undefined || allowed === true) return;
         document.querySelectorAll(selector).forEach(el => {
+          el.dataset.privilegeHidden = '1';
           el.style.display = 'none';
         });
       };

@@ -10,6 +10,7 @@ import spinnerModule from './spinner.js';
 import markdownModule from './markdown.js';
 import { makeWindowDraggable } from './windowDrag.js';
 import { langIcon } from './langIcons.js';
+import { openResearchReport } from './researchReport.js';
 
 // ── Injected references from documentModule ──
 let API_BASE = '';
@@ -76,13 +77,106 @@ function _hlSearch(text) {
   } catch { return esc; }
 }
 
-function _downloadResearchExport(researchId, format) {
+function _filenameFromDisposition(disposition, fallback) {
+  const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+  const plain = disposition.match(/filename="?([^";]+)"?/i);
+  let filename = encoded?.[1] || plain?.[1] || '';
+  try {
+    if (filename) filename = decodeURIComponent(filename);
+  } catch {}
+  return filename || fallback;
+}
+
+async function _errorMessageFromResponse(res) {
+  try {
+    const json = await res.clone().json();
+    if (json?.detail) return json.detail;
+  } catch {}
+  try {
+    const text = await res.text();
+    if (text) return text;
+  } catch {}
+  return `HTTP ${res.status}`;
+}
+
+async function _saveResponseAsDownload(res, fallbackName) {
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = `${API_BASE}/api/research/export/${encodeURIComponent(researchId)}?format=${encodeURIComponent(format)}`;
+  a.href = url;
+  a.download = _filenameFromDisposition(res.headers.get('Content-Disposition') || '', fallbackName);
+  a.rel = 'noopener';
+  a.style.display = 'none';
   document.body.appendChild(a);
   a.click();
   a.remove();
-  uiModule?.showToast?.(`Exporting ${format === 'markdown' ? 'Markdown' : format.toUpperCase()} report`);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function _researchExportFallbackName(format, count = 1) {
+  const suffix = format === 'markdown' ? 'md' : (format || 'html');
+  return count > 1 ? `deep-research-${suffix}.zip` : `deep-research-report.${suffix}`;
+}
+
+async function _downloadResearchExport(researchId, format) {
+  if (!researchId) return;
+  try {
+    uiModule?.showToast?.(`Preparing ${format === 'markdown' ? 'Markdown' : format.toUpperCase()} report...`);
+    const res = await fetch(`${API_BASE}/api/research/export/${encodeURIComponent(researchId)}?format=${encodeURIComponent(format)}`, {
+      credentials: 'same-origin',
+    });
+    if (!res.ok) throw new Error(await _errorMessageFromResponse(res));
+    await _saveResponseAsDownload(res, _researchExportFallbackName(format));
+    uiModule?.showToast?.(`Exported ${format === 'markdown' ? 'Markdown' : format.toUpperCase()} report`);
+  } catch (err) {
+    uiModule?.showError?.(`Could not export report: ${err.message || err}`);
+  }
+}
+
+async function _downloadResearchBulk(ids, format) {
+  if (!ids.length) return;
+  try {
+    uiModule?.showToast?.(`Preparing ${ids.length} reports…`);
+    const res = await fetch(`${API_BASE}/api/research/export-bulk`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, format }),
+    });
+    if (!res.ok) throw new Error(await _errorMessageFromResponse(res));
+    await _saveResponseAsDownload(res, _researchExportFallbackName(format, ids.length));
+    uiModule?.showToast?.(`Exported ${ids.length} reports as ZIP`);
+  } catch (err) {
+    uiModule?.showError?.(`Could not export reports: ${err.message || err}`);
+  }
+}
+
+async function _attachResearchToCurrentChat(ids) {
+  if (!ids.length) return false;
+  const sessionId = sessionModule.getCurrentSessionId?.();
+  if (!sessionId) {
+    uiModule?.showError?.('Open a chat before attaching research reports');
+    return false;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/research/attach-to-chat`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids, session_id: sessionId }),
+    });
+    if (!res.ok) {
+      let detail = '';
+      try { detail = (await res.json()).detail || ''; } catch {}
+      throw new Error(detail || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    uiModule?.showToast?.(`Attached ${data.attached} research report${data.attached === 1 ? '' : 's'} to this chat`);
+    return true;
+  } catch (err) {
+    uiModule?.showError?.(`Could not attach reports: ${err.message || err}`);
+    return false;
+  }
 }
 
 async function _openResearchExportFolder() {
@@ -1649,6 +1743,8 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
             <div id="doclib-research-bulk" class="memory-bulk-bar hidden" style="margin-bottom:5px;">
               <label class="memory-bulk-check-all" style="position:relative;top:0px;left:1px;"><input type="checkbox" id="doclib-research-select-all"> All</label>
               <span id="doclib-research-selected-count">0 Selected</span>
+              <button class="memory-toolbar-btn" id="doclib-research-bulk-attach" title="Attach selected reports to the current chat"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/><path d="M12 7v6M9 10h6"/></svg>Attach to Chat</button>
+              <button class="memory-toolbar-btn" id="doclib-research-bulk-export" title="Export selected reports"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>Export <span style="opacity:0.55;font-size:9px;">&#9660;</span></button>
               <button class="memory-toolbar-btn" id="doclib-research-bulk-archive" style="position:relative;top:-2px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>Archive</button>
               <button class="memory-toolbar-btn danger" id="doclib-research-bulk-delete" style="position:relative;top:-2px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-1px;margin-right:3px;"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>Delete</button>
               <button class="memory-toolbar-btn" id="doclib-research-bulk-cancel" title="Cancel (Esc)" style="margin-left:4px;padding:3px 6px;position:relative;top:-2px;"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
@@ -2483,7 +2579,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
           _toggleResearchPreview(card, r);
         });
         card.querySelector('._arc-res-menu').addEventListener('click', (e) => { e.stopPropagation(); _showLibDropdown(e.currentTarget, [
-          { label: 'Open', action: () => { const a = document.createElement('a'); a.href = '/api/research/report/' + r.id; a.target = '_blank'; a.rel = 'noopener'; document.body.appendChild(a); a.click(); a.remove(); } },
+          { label: 'Open', action: () => openResearchReport('/api/research/report/' + r.id) },
           { label: 'Restore', action: async () => { await fetch('/api/research/' + r.id + '/archive?archived=false', { method: 'POST', credentials: 'same-origin' }); _renderLibArchive(); } },
           { label: 'Delete', danger: true, action: async () => { if (!await window.styledConfirm('Delete this research?', { confirmText: 'Delete', danger: true })) return; await fetch('/api/research/' + r.id, { method: 'DELETE', credentials: 'same-origin' }); _renderLibArchive(); } },
         ], { onSelect: () => {
@@ -2725,13 +2821,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
       const openBtn = preview.querySelector('.doclib-chat-open-btn');
       if (openBtn) openBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const a = document.createElement('a');
-        a.href = '/api/research/report/' + item.id;
-        a.target = '_blank';
-        a.rel = 'noopener';
-        document.body.appendChild(a);
-        a.click();
-        a.remove();
+        openResearchReport('/api/research/report/' + item.id);
       });
       const delBtn = preview.querySelector('.doclib-chat-delete-btn');
       if (delBtn) delBtn.addEventListener('click', async (e) => {
@@ -2871,15 +2961,7 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
           e.stopPropagation();
           const rid = btn.dataset.rid;
           _showLibDropdown(btn, [
-            { label: 'Open', action: () => {
-                const a = document.createElement('a');
-                a.href = '/api/research/report/' + rid;
-                a.target = '_blank';
-                a.rel = 'noopener';
-                document.body.appendChild(a);
-                a.click();
-                a.remove();
-              } },
+            { label: 'Open', action: () => openResearchReport('/api/research/report/' + rid) },
             { label: 'Export HTML', icon: 'export', action: () => _downloadResearchExport(rid, 'html') },
             { label: 'Export Markdown', icon: 'export', action: () => _downloadResearchExport(rid, 'markdown') },
             { label: 'Export JSON', icon: 'export', action: () => _downloadResearchExport(rid, 'json') },
@@ -2938,6 +3020,11 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
       if (el) el.textContent = _researchSelected.size + ' Selected';
       const arc = document.getElementById('doclib-research-bulk-archive');
       if (arc) arc.textContent = _researchArchivedView ? 'Restore' : 'Archive';
+      const disabled = _researchSelected.size === 0;
+      document.getElementById('doclib-research-bulk-attach')?.toggleAttribute('disabled', disabled);
+      document.getElementById('doclib-research-bulk-export')?.toggleAttribute('disabled', disabled);
+      document.getElementById('doclib-research-bulk-delete')?.toggleAttribute('disabled', disabled);
+      arc?.toggleAttribute('disabled', disabled);
     }
 
     // Research select mode
@@ -3019,6 +3106,30 @@ let _libraryArchivedView = false;   // Documents tab showing archived docs?
       _researchItems.forEach(r => { if (newState) _researchSelected.add(r.id); else _researchSelected.delete(r.id); });
       _updateResearchCount();
       _renderResearchGrid();
+    });
+
+    document.getElementById('doclib-research-bulk-attach')?.addEventListener('click', async () => {
+      const ids = [..._researchSelected];
+      if (!ids.length) return;
+      const attached = await _attachResearchToCurrentChat(ids);
+      if (attached) {
+        _researchSelectMode = false;
+        _researchSelected.clear();
+        closeLibrary();
+        setTimeout(() => document.getElementById('message')?.focus(), 260);
+      }
+    });
+
+    document.getElementById('doclib-research-bulk-export')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const ids = [..._researchSelected];
+      if (!ids.length) return;
+      _showLibDropdown(e.currentTarget, [
+        { label: 'Export HTML as ZIP', icon: 'export', action: () => _downloadResearchBulk(ids, 'html') },
+        { label: 'Export Markdown as ZIP', icon: 'export', action: () => _downloadResearchBulk(ids, 'markdown') },
+        { label: 'Export JSON as ZIP', icon: 'export', action: () => _downloadResearchBulk(ids, 'json') },
+        { label: 'Open Export Folder', icon: 'folder', action: _openResearchExportFolder },
+      ]);
     });
 
     // Research bulk delete

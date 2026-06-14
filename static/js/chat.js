@@ -905,9 +905,10 @@ import createResearchSynapse from './researchSynapse.js';
       };
 
       if (el('research-toggle').checked && researchBtn) {
-        researchBtn.style.display = 'none';
-        // Uncheck research toggle so follow-up messages don't trigger another research
-        el('research-toggle').checked = false;
+        // One-shot mode: this request already captured use_research in fd.
+        // Keep the button visible so the feature remains discoverable.
+        if (window._syncResearchIndicator) window._syncResearchIndicator(false);
+        else el('research-toggle').checked = false;
       }
 
       // User's current UTC offset in minutes (east of UTC). Threaded into
@@ -1656,6 +1657,10 @@ import createResearchSynapse from './researchSynapse.js';
                 if (spinner && spinner.element) {
                   if (rp.phase === 'probing') {
                     spinner.updateMessage(`Verifying model: ${rp.model || '?'}`);
+                  } else if (rp.phase === 'context') {
+                    spinner.updateMessage(rp.scope === 'all_allowed'
+                      ? 'Reading Odysseus data and allowed folders'
+                      : (rp.scope === 'odysseus' ? 'Reading Odysseus context' : 'Preparing web research'));
                   } else if (rp.phase === 'planning') {
                     spinner.updateMessage('Analyzing question & planning research strategy');
                   } else if (rp.phase === 'searching') {
@@ -2724,14 +2729,12 @@ import createResearchSynapse from './researchSynapse.js';
         const _el = uiModule.el;
         const _researchBtn = _el('research-toggle-btn');
         const _researchToggle = _el('research-toggle');
-        if (_researchToggle && _researchToggle.checked) {
-          _researchToggle.checked = false;
-          Storage.setToggle('research', false);
+        if (_researchToggle && _researchToggle.checked && window._syncResearchIndicator) {
+          window._syncResearchIndicator(false);
         }
         if (_researchBtn) {
           _researchBtn.disabled = false;
           _researchBtn.classList.remove('active');
-          _researchBtn.style.display = 'none';
         }
         // Also sync overflow and tool sidebar buttons
         const _overflowRes = _el('overflow-research-btn');
@@ -3869,6 +3872,10 @@ import createResearchSynapse from './researchSynapse.js';
         const rp = progress;
         if (rp.phase === 'probing') {
           spinner.updateMessage(`Verifying model: ${rp.model || '?'}`);
+        } else if (rp.phase === 'context') {
+          spinner.updateMessage(rp.scope === 'all_allowed'
+            ? 'Reading Odysseus data and allowed folders'
+            : (rp.scope === 'odysseus' ? 'Reading Odysseus context' : 'Preparing web research'));
         } else if (rp.phase === 'planning') {
           spinner.updateMessage('Analyzing question & planning research strategy');
         } else if (rp.phase === 'searching') {

@@ -19,6 +19,7 @@ REQUEST_TIMEOUT = 20
 
 # Provider registry — maps setting value to (label, needs_key, needs_url)
 PROVIDER_INFO = {
+    "all":      ("All available engines", False, False),
     "searxng":  ("SearXNG",           False, True),
     "brave":    ("Brave Search",      True,  False),
     "duckduckgo": ("DuckDuckGo",      False, False),

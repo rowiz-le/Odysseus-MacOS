@@ -565,6 +565,10 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
                 val = str(val or "").strip().lower()
                 if val not in {"restricted", "user_folders", "home", "full"}:
                     raise HTTPException(400, "tool_path_access_mode must be restricted, user_folders, home, or full")
+            if key == "research_context_scope":
+                val = str(val or "").strip().lower()
+                if val not in {"web", "odysseus", "all_allowed"}:
+                    raise HTTPException(400, "research_context_scope must be web, odysseus, or all_allowed")
             if key == "tool_path_extra_roots":
                 if isinstance(val, str):
                     val = [line.strip() for line in val.splitlines() if line.strip()]

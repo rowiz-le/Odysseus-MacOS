@@ -83,6 +83,9 @@ DEFAULT_SETTINGS = {
     "research_endpoint_id": "",
     "research_model": "",
     "research_search_provider": "",
+    # web = no local data; odysseus = owner-scoped app data;
+    # all_allowed = app data plus text files under configured file-access roots.
+    "research_context_scope": "odysseus",
     "research_max_tokens": 16384,
     "research_extraction_timeout_seconds": 90,
     # Lightweight planning/query LLM calls happen before any search starts.
@@ -183,7 +186,7 @@ DEFAULT_SETTINGS = {
 DEFAULT_FEATURES = {
     "web_search": True,
     "web_fetch": True,
-    "deep_research": False,
+    "deep_research": True,
     "memory": True,
     "document_editor": True,
     "rag": True,

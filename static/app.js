@@ -629,6 +629,14 @@ function initializeEventListeners() {
     if (presetsModule && presetsModule.deactivateCharacter) presetsModule.deactivateCharacter();
   }
 
+  function _researchComposerVisibleByPreference() {
+    try {
+      return Storage.getJSON('odysseus-ui-visibility', {})['research-btn'] !== false;
+    } catch (_) {
+      return true;
+    }
+  }
+
   /** Sync Research indicator button + overflow + tool sidebar active state. */
   function _syncResearchIndicator(active) {
     const btn = el('research-toggle-btn');
@@ -636,8 +644,13 @@ function initializeEventListeners() {
     const toolBtn = el('tool-research-btn');
     const chk = el('research-toggle');
     if (btn) {
-      btn.style.display = active ? '' : 'none';
+      const userVisible = _researchComposerVisibleByPreference();
+      if (btn.dataset.featureHidden !== '1' && btn.dataset.privilegeHidden !== '1' && userVisible) {
+        btn.style.display = '';
+      }
       btn.classList.toggle('active', active);
+      btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+      btn.title = active ? 'Deep Research enabled for the next message' : 'Deep Research';
     }
     // Hide from overflow menu when showing in chatbox (avoid duplicate)
     if (overflow) {
@@ -1293,9 +1306,16 @@ function initializeEventListeners() {
         gallery:         ['tool-gallery-btn', 'rail-gallery'],
       };
       Object.entries(map).forEach(([key, ids]) => {
-        if (features[key] === false) {
-          ids.forEach(id => { const e = el(id); if (e) e.style.display = 'none'; });
-        }
+        ids.forEach(id => {
+          const e = el(id);
+          if (!e) return;
+          if (features[key] === false) {
+            e.dataset.featureHidden = '1';
+            e.style.display = 'none';
+          } else {
+            delete e.dataset.featureHidden;
+          }
+        });
       });
       // Re-apply the user's Appearance UI-vis preferences after the
       // features fetch finishes hiding things — otherwise an admin-
@@ -1304,6 +1324,11 @@ function initializeEventListeners() {
       // off then on to trigger applyUIVis a second time, which is the
       // bug they report as "deep research only shows after I toggle".
       try { if (window.applyUIVis && window.loadUIVis) window.applyUIVis(window.loadUIVis()); } catch (_) {}
+      Object.entries(map).forEach(([key, ids]) => {
+        if (features[key] === false) {
+          ids.forEach(id => { const e = el(id); if (e) e.style.display = 'none'; });
+        }
+      });
     })
     .catch(() => {});
 
@@ -1876,7 +1901,11 @@ function initializeEventListeners() {
       const resState = st.research || false;
       el('research-toggle').checked = resState;
       researchBtn.classList.toggle('active', resState);
-      researchBtn.style.display = resState ? '' : 'none';
+      if (researchBtn.dataset.featureHidden !== '1' && _researchComposerVisibleByPreference()) {
+        researchBtn.style.display = '';
+      }
+      researchBtn.setAttribute('aria-pressed', resState ? 'true' : 'false');
+      researchBtn.title = resState ? 'Deep Research enabled for the next message' : 'Deep Research';
       // Sync overflow + tool sidebar on load
       const overflowRes = el('overflow-research-btn');
       if (overflowRes) overflowRes.classList.toggle('active', resState);
@@ -2378,7 +2407,7 @@ function initializeEventListeners() {
     'mode-toggle':         '.mode-toggle, .agent-runtime-toggle',
     'preset-mini-btn':     '#overflow-preset-btn',
     'attach-btn':          '#overflow-attach-btn',
-    'research-btn':        '#overflow-research-btn',
+    'research-btn':        '#research-toggle-btn',
     'rail-new-chat':       '#rail-new-session',
   };
 
@@ -3977,7 +4006,7 @@ function startOdysseusApp() {
 
   // Section collapse/expand + drag reorder (extracted to js/section-management.js)
   initSectionCollapse(Storage);
-  initSectionDrag(Storage, loadUIVis);
+  initSectionDrag(Storage, window.loadUIVis || (() => ({})));
   
   // Handle drag over and out for individual sections
   const sections = document.querySelectorAll('.section[draggable="true"]');

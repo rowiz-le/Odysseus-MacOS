@@ -15,6 +15,7 @@ import types
 import asyncio
 import json
 import pytest
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -218,6 +219,111 @@ def test_research_export_writes_utf8_markdown_to_exports_folder(tmp_path, monkey
     assert len(exported) == 1
     assert exported[0].read_text(encoding="utf-8") == "# Báo cáo\n\nNội dung tiếng Việt đầy đủ dấu."
     assert Path(response.path) == exported[0]
+
+
+def test_research_bulk_export_creates_one_zip_with_selected_reports(tmp_path, monkeypatch):
+    from routes import research_routes
+
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data" / "deep_research"
+    data_dir.mkdir(parents=True)
+    for rid, title in (("rp-one", "Báo cáo một"), ("rp-two", "Báo cáo hai")):
+        (data_dir / f"{rid}.json").write_text(
+            json.dumps(
+                {
+                    "owner": "alice",
+                    "query": title,
+                    "raw_report": f"# {title}\n\nNội dung đầy đủ dấu.",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(research_routes, "_RESEARCH_DATA_DIR", data_dir)
+    monkeypatch.setattr(research_routes, "_RESEARCH_EXPORT_DIR", data_dir / "exports")
+
+    router = research_routes.setup_research_routes(MagicMock())
+    target = next(
+        r.endpoint for r in router.routes
+        if getattr(r, "path", "") == "/api/research/export-bulk"
+    )
+    response = asyncio.run(
+        target(
+            request=_fake_request(user="alice"),
+            body=research_routes.BulkResearchExportRequest(
+                ids=["rp-one", "rp-two"],
+                format="markdown",
+            ),
+        )
+    )
+
+    zip_path = Path(response.path)
+    assert zip_path.exists()
+    with zipfile.ZipFile(zip_path) as archive:
+        names = archive.namelist()
+        assert len(names) == 2
+        assert all(name.endswith(".md") for name in names)
+        contents = [archive.read(name).decode("utf-8") for name in names]
+    assert any("Báo cáo một" in content for content in contents)
+    assert any("Báo cáo hai" in content for content in contents)
+
+
+def test_research_bulk_attach_adds_hidden_context_to_owned_chat(tmp_path, monkeypatch):
+    from routes import research_routes
+
+    class _ChatMessage:
+        def __init__(self, role, content, metadata=None):
+            self.role = role
+            self.content = content
+            self.metadata = metadata
+
+    core_models = __import__("core.models", fromlist=["ChatMessage"])
+    monkeypatch.setattr(core_models, "ChatMessage", _ChatMessage)
+    monkeypatch.chdir(tmp_path)
+    data_dir = tmp_path / "data" / "deep_research"
+    data_dir.mkdir(parents=True)
+    for rid, title in (("rp-one", "Nghiên cứu một"), ("rp-two", "Nghiên cứu hai")):
+        (data_dir / f"{rid}.json").write_text(
+            json.dumps(
+                {
+                    "owner": "alice",
+                    "query": title,
+                    "raw_report": f"# {title}\n\nKết quả nghiên cứu.",
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    monkeypatch.setattr(research_routes, "_RESEARCH_DATA_DIR", data_dir)
+
+    chat = SimpleNamespace(owner="alice", add_message=MagicMock())
+    manager = SimpleNamespace(
+        get_session=MagicMock(return_value=chat),
+        save_sessions=MagicMock(),
+    )
+    router = research_routes.setup_research_routes(MagicMock(), session_manager=manager)
+    target = next(
+        r.endpoint for r in router.routes
+        if getattr(r, "path", "") == "/api/research/attach-to-chat"
+    )
+    result = asyncio.run(
+        target(
+            request=_fake_request(user="alice"),
+            body=research_routes.AttachResearchRequest(
+                ids=["rp-one", "rp-two"],
+                session_id="chat-one",
+            ),
+        )
+    )
+
+    assert result["attached"] == 2
+    attached_message = chat.add_message.call_args.args[0]
+    assert attached_message.role == "user"
+    assert "Nghiên cứu một" in attached_message.content
+    assert "Nghiên cứu hai" in attached_message.content
+    assert attached_message.metadata["hidden"] is True
+    assert attached_message.metadata["research_attachments"] == ["rp-one", "rp-two"]
+    manager.save_sessions.assert_called_once()
 
 
 def test_open_research_folder_requires_direct_desktop_request(monkeypatch):

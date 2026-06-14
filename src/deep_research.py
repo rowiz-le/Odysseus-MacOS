@@ -205,12 +205,16 @@ class DeepResearcher:
         progress_callback: Optional[Callable] = None,
         search_provider: Optional[str] = None,
         category: Optional[str] = None,
+        local_context: str = "",
+        context_stats: Optional[Dict] = None,
     ):
         self.llm_endpoint = llm_endpoint
         self.llm_model = llm_model
         self.llm_headers = llm_headers
         self.search_provider_override = search_provider
         self.category = category
+        self.local_context = local_context or ""
+        self.context_stats = context_stats or {}
         self.max_rounds = max_rounds
         self.max_time = max_time
         self.max_urls_per_round = max_urls_per_round
@@ -237,6 +241,11 @@ class DeepResearcher:
         self.evolving_report: str = ""
         self.research_plan: str = ""
 
+    def _with_local_context(self, question: str) -> str:
+        if not self.local_context:
+            return question
+        return f"{question}\n\n{self.local_context}"
+
     def cancel(self):
         """Request cooperative cancellation of the research loop."""
         self._cancelled = True
@@ -262,16 +271,23 @@ class DeepResearcher:
         self._start_time = time.time()
         findings: List[Dict] = list(prior_findings) if prior_findings else []
         report = prior_report or ""
+        if self.local_context and int(self.context_stats.get("items") or 0) > 0:
+            findings.append({
+                "title": "Local Odysseus context",
+                "summary": self.local_context[:8000],
+                "evidence": self.local_context,
+                "source_type": "local_context",
+            })
 
         # PLAN: Analyze the question and create a research strategy
         if not prior_report:
             self._emit(phase="planning")
-            self.research_plan = await self._create_plan(question)
+            self.research_plan = await self._create_plan(self._with_local_context(question))
             logger.info(f"Research plan: {self.research_plan[:200]}")
         else:
             # Continuation — plan around the follow-up
             self._emit(phase="planning")
-            self.research_plan = await self._create_plan(question)
+            self.research_plan = await self._create_plan(self._with_local_context(question))
             logger.info(f"Continuation plan: {self.research_plan[:200]}")
         if not self.category and not prior_report:
             self.category = await self._classify_category(question)
@@ -296,7 +312,7 @@ class DeepResearcher:
             self._emit(phase="searching", round=round_num, total_sources=len(self.urls_fetched))
 
             # THINK: generate queries
-            queries = await self._generate_queries(question, report, round_num)
+            queries = await self._generate_queries(self._with_local_context(question), report, round_num)
             if not queries:
                 logger.warning(f"Round {round_num}: no queries generated, stopping")
                 break
@@ -335,11 +351,13 @@ class DeepResearcher:
                 self._emit(phase="analyzing", round=round_num,
                            total_sources=len(self.urls_fetched),
                            total_findings=len(findings))
-                report = await self._synthesize(question, findings, report)
+                report = await self._synthesize(self._with_local_context(question), findings, report)
 
             # DECIDE
             if round_num >= self.min_rounds:
-                should_stop = await self._should_stop(question, report, round_num)
+                should_stop = await self._should_stop(
+                    self._with_local_context(question), report, round_num
+                )
                 if should_stop:
                     logger.info(f"LLM decided to stop after round {round_num}")
                     break
@@ -551,7 +569,7 @@ class DeepResearcher:
         """Run a search query using the configured research search provider."""
         try:
             from src.search.providers import _get_search_settings
-            from src.search.core import _call_provider, _build_provider_chain
+            from src.search.core import _call_provider, _build_provider_chain, search_all_providers
 
             settings = _get_search_settings()
             provider = (self.search_provider_override or "").strip()
@@ -562,6 +580,24 @@ class DeepResearcher:
 
             if provider == "disabled":
                 logger.info("Search is disabled for research")
+                return []
+
+            if provider == "all":
+                results = await asyncio.to_thread(search_all_providers, query, 10)
+                used = []
+                for result in results:
+                    prov = result.get("search_provider")
+                    if prov and prov not in used:
+                        used.append(prov)
+                    if prov and prov not in self.providers_used:
+                        self.providers_used.append(prov)
+                if results:
+                    logger.info(
+                        "Research search: all engines returned %d unique results via %s",
+                        len(results), ", ".join(used),
+                    )
+                    return results
+                self._last_search_error = "no results from any available search engine"
                 return []
 
             # Try primary provider, then fallbacks
@@ -876,13 +912,14 @@ class DeepResearcher:
         """Format findings list into readable text for synthesis prompt."""
         parts = []
         for i, f in enumerate(findings, 1):
-            url = f.get("url", "unknown")
+            url = f.get("url", "")
             title = f.get("title", "")
             summary = f.get("summary", "")
             evidence = f.get("evidence", "")
             # Use summary if available, fall back to truncated evidence
             content = summary if summary else (evidence[:1000] if evidence else "(no content)")
-            parts.append(f"**Finding {i}** — [{title}]({url})\n{content}")
+            heading = f"[{title}]({url})" if url else title
+            parts.append(f"**Finding {i}** — {heading}\n{content}")
         return "\n\n".join(parts)
 
     def _fallback_report(self, question: str, findings: List[Dict]) -> str:
@@ -914,4 +951,7 @@ class DeepResearcher:
             stats["Search"] = ", ".join(self.providers_used)
         if self.category:
             stats["Category"] = self.category.capitalize()
+        context_items = int(self.context_stats.get("items") or 0)
+        if context_items:
+            stats["Local context"] = f"{context_items} items"
         return stats
