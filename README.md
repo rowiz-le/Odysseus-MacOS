@@ -1,6 +1,6 @@
 # Odysseus macOS
 
-![Odysseus macOS](docs/odysseus-macos-app.png)
+![Odysseus macOS](docs/github-social-preview.png)
 
 <p align="center">
   <a href="https://github.com/rowiz-le/Odysseus-MacOS/releases/download/v2026.06.15.2/Odysseus-macOS-2026.06.15.2.dmg">
