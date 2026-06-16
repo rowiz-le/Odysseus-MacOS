@@ -8496,6 +8496,15 @@ body.hide-thinking .thinking-section { display: none !important; }
 .agent-thread-node.error .agent-thread-dot {
   background: var(--color-error);
 }
+.agent-thread-node.fusion-tool-node .agent-thread-dot {
+  background: color-mix(in srgb, var(--accent, #b9976b) 72%, var(--red));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #b9976b) 18%, transparent);
+}
+.agent-thread-node.fusion-tool-node .agent-thread-icon,
+.agent-thread-node.fusion-tool-node .agent-thread-tool,
+.agent-thread-node.fusion-tool-node .agent-thread-wave {
+  color: color-mix(in srgb, var(--accent, #b9976b) 80%, var(--fg));
+}
 .agent-thread-header {
   display: flex;
   align-items: center;
@@ -8603,6 +8612,189 @@ body.hide-thinking .thinking-section { display: none !important; }
   overflow-x: auto;
 }
 
+/* Fusion sub-agent live status */
+.fusion-run-panel {
+  margin: 8px 0 8px 28px;
+  padding: 10px 12px;
+  max-width: min(760px, calc(85% - 20px));
+  border: 1px solid color-mix(in srgb, var(--accent, #b9976b) 26%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--panel) 88%, var(--accent, #b9976b) 5%);
+  box-shadow: 0 8px 28px color-mix(in srgb, #000 22%, transparent);
+}
+.fusion-run-panel.error {
+  border-color: color-mix(in srgb, var(--color-error) 45%, var(--border));
+}
+.fusion-run-panel.skipped {
+  border-color: color-mix(in srgb, #d99a2b 45%, var(--border));
+}
+.fusion-run-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.fusion-run-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.fusion-run-title strong {
+  font-size: 13px;
+  line-height: 1.25;
+}
+.fusion-run-orb {
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent, #b9976b) 76%, var(--red));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #b9976b) 18%, transparent);
+  flex: 0 0 auto;
+}
+.fusion-run-panel.running .fusion-run-orb {
+  animation: thread-pulse 1.2s ease-in-out infinite;
+}
+.fusion-run-state {
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--fg) 72%, transparent);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  flex: 0 0 auto;
+}
+.fusion-run-panel.done .fusion-run-state {
+  color: color-mix(in srgb, #68d391 80%, var(--fg));
+  border-color: color-mix(in srgb, #68d391 30%, var(--border));
+}
+.fusion-run-panel.error .fusion-run-state {
+  color: var(--color-error);
+  border-color: color-mix(in srgb, var(--color-error) 45%, var(--border));
+}
+.fusion-run-panel.skipped .fusion-run-state {
+  color: #d99a2b;
+  border-color: color-mix(in srgb, #d99a2b 42%, var(--border));
+}
+.fusion-run-sub {
+  margin-top: 5px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--fg) 62%, transparent);
+  line-height: 1.35;
+}
+.fusion-run-members {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 6px;
+  margin-top: 10px;
+}
+.fusion-run-member {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--fg) 8%, transparent);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bg) 32%, transparent);
+}
+.fusion-run-member-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 5px;
+  background: color-mix(in srgb, var(--accent, #b9976b) 76%, var(--red));
+  flex: 0 0 auto;
+}
+.fusion-run-member-dot.running {
+  animation: thread-pulse 1.2s ease-in-out infinite;
+}
+.fusion-run-member-dot.done {
+  background: #68d391;
+}
+.fusion-run-member-dot.error {
+  background: var(--color-error);
+}
+.fusion-run-member-dot.skipped {
+  background: #d99a2b;
+}
+.fusion-run-member-main {
+  min-width: 0;
+  flex: 1;
+}
+.fusion-run-member-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+.fusion-run-member-top strong,
+.fusion-run-member-model,
+.fusion-run-member-meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fusion-run-member-top span {
+  color: color-mix(in srgb, var(--fg) 50%, transparent);
+  font-size: 10px;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+.fusion-run-member-model {
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--fg);
+}
+.fusion-run-member-meta {
+  margin-top: 1px;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--fg) 52%, transparent);
+}
+.fusion-run-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.fusion-run-foot span {
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: color-mix(in srgb, var(--fg) 68%, transparent);
+}
+.fusion-run-empty {
+  padding: 8px;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--fg) 58%, transparent);
+  border: 1px dashed color-mix(in srgb, var(--fg) 14%, transparent);
+  border-radius: 7px;
+}
+.fusion-run-error,
+.fusion-run-preview pre {
+  margin: 8px 0 0;
+  padding: 8px;
+  border-radius: 7px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 11px;
+  line-height: 1.4;
+  background: color-mix(in srgb, #000 24%, transparent);
+  border: 1px solid color-mix(in srgb, var(--fg) 10%, transparent);
+}
+.fusion-run-error {
+  color: var(--color-error);
+  border-color: color-mix(in srgb, var(--color-error) 35%, transparent);
+}
+.fusion-run-preview summary {
+  margin-top: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  color: color-mix(in srgb, var(--fg) 66%, transparent);
+}
+
 /* Mobile: constrain thread content */
 @media (max-width: 768px) {
   .agent-thread {
@@ -8630,6 +8822,16 @@ body.hide-thinking .thinking-section { display: none !important; }
   .agent-thread-dot {
     left: -16px;
     top: 10px;
+  }
+  .fusion-run-panel {
+    margin-left: 16px;
+    max-width: calc(90% - 16px);
+  }
+  .fusion-run-members {
+    grid-template-columns: 1fr;
+  }
+  .fusion-run-head {
+    align-items: flex-start;
   }
 }
 

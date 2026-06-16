@@ -735,6 +735,10 @@ import createResearchSynapse from './researchSynapse.js';
       // Web toggle: pre-search in Chat mode, tool permission in Agent mode
       const toggleState = Storage.loadToggleState();
       let isAgentMode = (toggleState.mode || 'chat') === 'agent';
+      const fusionBtn = el('fusion-subagent-btn');
+      const fusionSubagentsOn = !!(fusionBtn && fusionBtn.classList.contains('active'));
+      if (fusionSubagentsOn) isAgentMode = true;
+      fd.append('fusion_subagent_enabled', fusionSubagentsOn ? 'true' : 'false');
       // Auto-escalate to agent mode when a document is open — the user expects
       // the AI to see the document and have tools to edit it
       if (!isAgentMode && documentModule && documentModule.isPanelOpen() && documentModule.getCurrentDocId()) {
@@ -1028,6 +1032,16 @@ import createResearchSynapse from './researchSynapse.js';
         'deep_research': 'Researching',
         'list_models': 'Browsing',
         'ui_control': 'Adjusting',
+        'mcp__fusion_mcp__fusion_execute_tasks': 'Fusion sub-agents',
+        'mcp__fusion_mcp__fusion_coding_assist': 'Fusion coding assist',
+        'mcp__fusion_mcp__fusion_implementation_plan': 'Fusion plan',
+        'mcp__fusion_mcp__fusion_code_review': 'Fusion code review',
+        'mcp__fusion_mcp__fusion_chat': 'Fusion chat',
+        'mcp__fusion_mcp__fusion_run_panel': 'Fusion panel',
+        'fusion_execute_tasks': 'Fusion sub-agents',
+        'fusion_coding_assist': 'Fusion coding assist',
+        'fusion_implementation_plan': 'Fusion plan',
+        'fusion_code_review': 'Fusion code review',
       };
       function _thinkingLabel() {
         if (!_lastToolName) {
@@ -1054,6 +1068,95 @@ import createResearchSynapse from './researchSynapse.js';
         _thinkMsg._spinner = _ts;
         _thinkMsg.appendChild(_thinkBody);
         document.getElementById('chat-history').appendChild(_thinkMsg);
+        uiModule.scrollHistory();
+      }
+
+      let currentFusionPanel = null;
+      function _fusionToolName(name) {
+        const lower = String(name || '').toLowerCase();
+        return _toolLabels[lower] || (lower.includes('fusion') ? 'Fusion sub-agents' : (name || 'Fusion'));
+      }
+      function _fusionStatusClass(status) {
+        const s = String(status || '').toLowerCase();
+        if (s === 'error' || s === 'failed') return 'error';
+        if (s === 'skipped') return 'skipped';
+        if (s === 'done' || s === 'complete' || s === 'completed') return 'done';
+        return 'running';
+      }
+      function _fusionStatusText(status) {
+        const s = String(status || '').toLowerCase();
+        if (s === 'error' || s === 'failed') return 'error';
+        if (s === 'skipped') return 'skipped';
+        if (s === 'done' || s === 'complete' || s === 'completed') return 'done';
+        if (s === 'armed') return 'armed';
+        if (s === 'starting') return 'starting';
+        return 'running';
+      }
+      function _ensureFusionPanel(data) {
+        const chatBox = document.getElementById('chat-history');
+        if (!chatBox) return null;
+        const status = String(data?.status || '').toLowerCase();
+        if (!currentFusionPanel || !document.body.contains(currentFusionPanel) || status === 'starting') {
+          currentFusionPanel = document.createElement('div');
+          currentFusionPanel.className = 'fusion-run-panel running';
+          chatBox.appendChild(currentFusionPanel);
+        }
+        return currentFusionPanel;
+      }
+      function _renderFusionMembers(members, status) {
+        if (!Array.isArray(members) || !members.length) {
+          return '<div class="fusion-run-empty">Waiting for Fusion roster...</div>';
+        }
+        const rowStatus = _fusionStatusText(status);
+        return members.map((m) => {
+          const itemStatus = m.status || status;
+          const role = esc(m.role || 'member');
+          const model = esc(m.model_label || m.model || m.model_id || 'model');
+          const provider = esc(m.provider || '');
+          const account = esc(m.account_id || 'auto');
+          const health = esc(m.health || 'unknown');
+          const latency = Number(m.latency_ms || 0) > 0 ? ` · ${Math.round(Number(m.latency_ms))}ms` : '';
+          const metaText = `${provider}${provider ? ' / ' : ''}${account} · ${health}${latency}`;
+          return `<div class="fusion-run-member">
+            <span class="fusion-run-member-dot ${_fusionStatusClass(itemStatus)}"></span>
+            <div class="fusion-run-member-main">
+              <div class="fusion-run-member-top"><strong>${role}</strong><span>${esc(_fusionStatusText(itemStatus) || rowStatus)}</span></div>
+              <div class="fusion-run-member-model">${model}</div>
+              <div class="fusion-run-member-meta">${esc(metaText)}</div>
+            </div>
+          </div>`;
+        }).join('');
+      }
+      function _updateFusionPanel(data) {
+        const panel = _ensureFusionPanel(data || {});
+        if (!panel) return;
+        const cls = _fusionStatusClass(data.status);
+        panel.className = `fusion-run-panel ${cls}`;
+        const title = _fusionToolName(data.tool);
+        const panelLabel = data.panel_label || data.panel || 'auto';
+        const meta = [
+          panelLabel ? `panel ${panelLabel}` : '',
+          data.depth ? `depth ${data.depth}` : '',
+          data.max_agents ? `${data.max_agents} agents` : '',
+          data.round ? `round ${data.round}` : '',
+        ].filter(Boolean).map(esc).join(' · ');
+        const actionInfo = Number(data.action_count || 0) > 0 ? `<span>${esc(String(data.action_count))} actions</span>` : '';
+        const fallbackInfo = Number(data.fallback_count || 0) > 0 ? `<span>${esc(String(data.fallback_count))} fallback/error signals</span>` : '';
+        const message = data.message || 'Fusion sub-agent status';
+        const err = data.error ? `<pre class="fusion-run-error">${esc(data.error)}</pre>` : '';
+        const preview = data.output_preview && cls !== 'running'
+          ? `<details class="fusion-run-preview"><summary>Output preview</summary><pre>${esc(data.output_preview)}</pre></details>`
+          : '';
+        panel.innerHTML = `
+          <div class="fusion-run-head">
+            <div class="fusion-run-title"><span class="fusion-run-orb"></span><strong>${esc(title)}</strong></div>
+            <div class="fusion-run-state">${esc(_fusionStatusText(data.status))}</div>
+          </div>
+          <div class="fusion-run-sub">${esc(message)}${meta ? ` · ${meta}` : ''}</div>
+          <div class="fusion-run-members">${_renderFusionMembers(data.members, data.status)}</div>
+          <div class="fusion-run-foot">${actionInfo}${fallbackInfo}</div>
+          ${err}${preview}
+        `;
         uiModule.scrollHistory();
       }
 
@@ -1867,6 +1970,12 @@ import createResearchSynapse from './researchSynapse.js';
                 if (_isBg) continue;
                 if (currentHolder && json.id) currentHolder.dataset.dbId = json.id;
 
+              } else if (json.type === 'fusion_status') {
+                if (_isBg) continue;
+                _cancelThinkingTimer();
+                _removeThinkingSpinner();
+                _updateFusionPanel(json);
+
               } else if (json.type === 'tool_start') {
                 if (_isBg) continue;
                 _cancelThinkingTimer();
@@ -1942,7 +2051,9 @@ import createResearchSynapse from './researchSynapse.js';
                 threadWrap.classList.add('streaming');
                 const toolLabel = _toolLabels[json.tool.toLowerCase()] || json.tool;
                 const node = document.createElement('div')
-                node.className = 'agent-thread-node running';
+                const isFusionTool = String(json.tool || '').toLowerCase().includes('fusion');
+                node.className = 'agent-thread-node running' + (isFusionTool ? ' fusion-tool-node' : '');
+                node.dataset.tool = json.tool || '';
                 const cmdHtml = cmd ? `<pre class="agent-thread-cmd">${esc(cmd)}</pre>` : '';
                 node.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">\u25B6</span><span class="agent-thread-tool">${toolLabel}</span><span class="agent-thread-wave">▁▂▃</span></div><div class="agent-thread-content">${cmdHtml}</div>`;
                 // Expand/collapse via delegated click handler (init at module bottom).
@@ -2033,8 +2144,10 @@ import createResearchSynapse from './researchSynapse.js';
                   // click again. Click handling is delegated (see init at
                   // bottom of file) so no per-node listener needed.
                   const _wasOpen = currentToolBubble.classList.contains('open');
-                  currentToolBubble.className = 'agent-thread-node' + (ok ? '' : ' error') + (_wasOpen ? ' open' : '');
-                  currentToolBubble.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${esc(json.tool)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml2}${outHtml}</div>`;
+                  const finalToolLabel = _toolLabels[String(json.tool || '').toLowerCase()] || json.tool;
+                  const finalIsFusionTool = String(json.tool || '').toLowerCase().includes('fusion');
+                  currentToolBubble.className = 'agent-thread-node' + (ok ? '' : ' error') + (finalIsFusionTool ? ' fusion-tool-node' : '') + (_wasOpen ? ' open' : '');
+                  currentToolBubble.innerHTML = `<div class="agent-thread-dot"></div><div class="agent-thread-header"><span class="agent-thread-icon">${ok ? '\u2713' : '\u2717'}</span><span class="agent-thread-tool">${esc(finalToolLabel)}</span><span class="agent-thread-status">${ok ? 'done' : 'failed'}</span><span class="agent-thread-chevron">\u25B6</span></div><div class="agent-thread-content">${cmdHtml2}${outHtml}</div>`;
                   // Reset so thinking spinner between tools says "Thinking" not the old tool's label
                   _lastToolName = '';
                   uiModule.scrollHistory();

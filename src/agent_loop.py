@@ -9,10 +9,12 @@ The LLM decides when to use tools by writing fenced code blocks.
 import asyncio
 import collections
 import json
+import os
 import re
 import time
 import logging
-from typing import AsyncGenerator, List, Dict, Optional, Set
+from pathlib import Path
+from typing import Any, AsyncGenerator, List, Dict, Optional, Set
 from urllib.parse import urlparse
 
 from src.llm_core import stream_llm, stream_llm_with_fallback, _is_ollama_native_url
@@ -641,7 +643,7 @@ _ADMIN_SCHEMA_NAMES = frozenset([
 _TOOL_SELECTION_TIMEOUT_SECONDS = 1.5
 
 
-def _fusion_subagent_settings() -> dict:
+def _fusion_subagent_settings(override: Optional[Dict[str, Any]] = None) -> dict:
     """Small normalized view of the Fusion sub-agent settings."""
     enabled = bool(get_setting("fusion_subagent_enabled", False))
     depth = str(get_setting("fusion_subagent_depth", "fast") or "fast").strip().lower()
@@ -652,12 +654,244 @@ def _fusion_subagent_settings() -> dict:
         max_agents = int(get_setting("fusion_subagent_max_agents", 3) or 3)
     except (TypeError, ValueError):
         max_agents = 3
-    return {
+    cfg = {
         "enabled": enabled,
         "depth": depth,
         "panel": panel,
         "max_agents": max(1, min(max_agents, 8)),
     }
+    if override:
+        if "enabled" in override:
+            cfg["enabled"] = bool(override.get("enabled"))
+        if override.get("depth"):
+            depth_o = str(override.get("depth") or "").strip().lower()
+            if depth_o in {"fast", "deep", "review"}:
+                cfg["depth"] = depth_o
+        if override.get("panel") is not None:
+            cfg["panel"] = str(override.get("panel") or "").strip()
+        if override.get("max_agents") is not None:
+            try:
+                cfg["max_agents"] = max(1, min(int(override.get("max_agents") or 3), 8))
+            except (TypeError, ValueError):
+                pass
+    return cfg
+
+
+def _is_fusion_tool(tool_name: str) -> bool:
+    """True when a tool call belongs to Fusion MCP orchestration."""
+    name = (tool_name or "").strip()
+    return (
+        name in _FUSION_EXECUTION_TOOL_NAMES
+        or name.startswith("mcp__fusion_mcp__fusion_")
+        or name.startswith("fusion_")
+    )
+
+
+def _fusion_config_root() -> Path:
+    root = os.environ.get("FUSION_MCP_ROOT") or str(
+        Path.home() / ".local" / "share" / "antigravity-fusion-mcp"
+    )
+    return Path(root).expanduser() / "config"
+
+
+def _fusion_read_json(name: str) -> Any:
+    try:
+        return json.loads((_fusion_config_root() / name).read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _fusion_parse_args(raw: str) -> Dict[str, Any]:
+    text = (raw or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else {}
+    except Exception:
+        return {}
+
+
+def _fusion_panel_snapshot(panel_id: str = "", max_members: int = 8) -> Dict[str, Any]:
+    """Best-effort view of the currently selected Fusion panel for UI/prompt."""
+    cfg = _fusion_subagent_settings()
+    panels_data = _fusion_read_json("panels.json") or {}
+    registry_data = _fusion_read_json("model_registry.json") or {}
+    models = registry_data.get("models") if isinstance(registry_data, dict) else []
+    model_by_id = {
+        str(item.get("id")): item
+        for item in (models or [])
+        if isinstance(item, dict) and item.get("id")
+    }
+    panels = panels_data.get("panels") if isinstance(panels_data, dict) else []
+    selected_id = (panel_id or cfg.get("panel") or "").strip()
+    selected = None
+    if selected_id:
+        selected = next((p for p in (panels or []) if isinstance(p, dict) and p.get("id") == selected_id), None)
+    if selected is None and selected_id in {"", "auto"}:
+        selected = next((p for p in (panels or []) if isinstance(p, dict) and p.get("id") == "code-office"), None)
+    if selected is None and panels:
+        selected = next((p for p in panels if isinstance(p, dict)), None)
+
+    members = []
+    for member in (selected or {}).get("members", [])[:max(1, max_members)]:
+        if not isinstance(member, dict):
+            continue
+        mid = str(member.get("model_id") or "")
+        model = model_by_id.get(mid, {})
+        health = model.get("health") if isinstance(model.get("health"), dict) else {}
+        provider = model.get("provider") or (mid.split(":", 1)[0] if ":" in mid else "")
+        members.append({
+            "role": member.get("role") or "member",
+            "model_id": mid,
+            "model_label": model.get("label") or model.get("model") or mid,
+            "provider": provider,
+            "account_id": member.get("account_id") or health.get("account_id") or model.get("detected_by") or "",
+            "health": health.get("status") or ("ok" if model.get("verified") is True else str(model.get("verified") or "unknown")),
+        })
+
+    return {
+        "panel_id": (selected or {}).get("id") or selected_id or "auto",
+        "panel_label": (selected or {}).get("label") or selected_id or "Auto",
+        "mode": (selected or {}).get("mode") or "auto",
+        "members": members,
+    }
+
+
+def _fusion_contract_prompt(cfg: Dict[str, Any], last_user: str = "") -> str:
+    if not cfg.get("enabled"):
+        return ""
+    snapshot = _fusion_panel_snapshot(str(cfg.get("panel") or ""), int(cfg.get("max_agents") or 3))
+    roster = []
+    for member in snapshot.get("members", [])[: int(cfg.get("max_agents") or 3)]:
+        account = f" @ {member.get('account_id')}" if member.get("account_id") else ""
+        health = f", {member.get('health')}" if member.get("health") else ""
+        roster.append(
+            f"- {member.get('role')}: {member.get('model_label')} ({member.get('provider')}{account}{health})"
+        )
+    ql = (last_user or "").lower()
+    likely_code = any(kw in ql for kw in _FUSION_CODE_KEYWORDS)
+    return "\n".join([
+        "## FUSION SUB-AGENT MODE IS ON",
+        "This turn is running with Fusion mode enabled. Stay aware of it.",
+        (
+            "For this coding/debug/UI/review/architecture request, call "
+            "`mcp__fusion_mcp__fusion_execute_tasks` early, unless the task is truly trivial."
+            if likely_code
+            else
+            "For non-trivial coding/debug/UI/review/architecture work, call "
+            "`mcp__fusion_mcp__fusion_execute_tasks` early."
+        ),
+        "Fusion is not a comment-only advisor. Treat its result as sub-agent work: apply the returned action queue with local tools, then verify.",
+        f"Default Fusion args: depth={cfg.get('depth') or 'fast'}, panel={cfg.get('panel') or 'auto'}, max_agents={cfg.get('max_agents') or 3}.",
+        f"Visible panel: {snapshot.get('panel_label')} ({snapshot.get('panel_id')}), mode={snapshot.get('mode')}.",
+        "Current roster:",
+        *(roster or ["- auto: choose the healthiest matching Fusion panel"]),
+        "If you skip Fusion, say why in one sentence. If Fusion errors, continue with the best local fallback and report the failure.",
+        "Final response must state whether Fusion ran and whether sub-agent output was applied locally.",
+    ])
+
+
+def _fusion_status_payload(
+    status: str,
+    tool_name: str,
+    command: str,
+    round_num: int,
+    args: Optional[Dict[str, Any]] = None,
+    result: Optional[Dict[str, Any]] = None,
+    output_text: str = "",
+) -> Dict[str, Any]:
+    args = args or {}
+    cfg = _fusion_subagent_settings()
+    panel_id = str(args.get("panel") or cfg.get("panel") or "")
+    snapshot = _fusion_panel_snapshot(panel_id, int(args.get("max_agents") or cfg.get("max_agents") or 3))
+    exit_code = (result or {}).get("exit_code")
+    failed = bool(result and (result.get("error") or result.get("success") is False or (exit_code is not None and exit_code != 0)))
+    out = output_text or ""
+    if result and not out:
+        raw = result.get("output") or result.get("content") or result.get("results") or result.get("error") or ""
+        out = raw if isinstance(raw, str) else json.dumps(raw)[:2000]
+    action_count = 0
+    for pat in (r"\n\d+\.\s+", r"\n- Apply ", r"\n- Inspect ", r"\n- Edit "):
+        action_count = max(action_count, len(re.findall(pat, "\n" + out)))
+    lower_out = out.lower()
+    fallback_count = lower_out.count("fallback") + lower_out.count("failed") + lower_out.count("error")
+    trace_members = _fusion_trace_members(out)
+    message = {
+        "armed": "Fusion mode armed",
+        "starting": "Fusion sub-agents starting",
+        "running": "Fusion sub-agents running",
+        "done": "Fusion sub-agents finished",
+        "error": "Fusion sub-agents failed",
+        "skipped": "Fusion was enabled, but no Fusion tool was called",
+    }.get(status, "Fusion sub-agent status")
+    if failed:
+        status = "error"
+    return {
+        "type": "fusion_status",
+        "status": status,
+        "tool": tool_name,
+        "command": command[:500],
+        "round": round_num,
+        "panel": snapshot.get("panel_id"),
+        "panel_label": snapshot.get("panel_label"),
+        "mode": snapshot.get("mode"),
+        "depth": args.get("depth") or cfg.get("depth"),
+        "max_agents": args.get("max_agents") or cfg.get("max_agents"),
+        "members": trace_members or snapshot.get("members") or [],
+        "message": message,
+        "action_count": action_count,
+        "fallback_count": fallback_count,
+        "error": (result or {}).get("error") or ("Fusion output contained failures" if status == "error" and fallback_count else ""),
+        "output_preview": out[:900],
+    }
+
+
+def _fusion_result_output_text(result: Optional[Dict[str, Any]]) -> str:
+    if not result:
+        return ""
+    if "stdout" in result:
+        return (result.get("stdout") or result.get("stderr") or result.get("error", ""))[:4000]
+    if "output" in result:
+        return (result.get("output") or "")[:4000]
+    if "content" in result:
+        return str(result.get("content") or "")[:4000]
+    if "results" in result:
+        raw = result.get("results")
+        return (raw if isinstance(raw, str) else json.dumps(raw, ensure_ascii=False))[:4000]
+    if "error" in result:
+        return str(result.get("error") or "")[:4000]
+    return json.dumps(result, ensure_ascii=False)[:4000]
+
+
+def _fusion_trace_members(output_text: str) -> List[Dict[str, Any]]:
+    text = output_text or ""
+    match = re.search(r"## Trace\s*```json\s*([\s\S]*?)```", text, re.IGNORECASE)
+    if not match:
+        return []
+    try:
+        trace = json.loads(match.group(1))
+    except Exception:
+        return []
+    if not isinstance(trace, list):
+        return []
+    members = []
+    for item in trace:
+        if not isinstance(item, dict):
+            continue
+        ok = item.get("ok") is not False and not item.get("error")
+        members.append({
+            "role": item.get("role") or "member",
+            "model_id": item.get("model_id") or item.get("model") or "",
+            "model_label": item.get("model") or item.get("model_id") or "model",
+            "provider": item.get("provider") or "",
+            "account_id": item.get("account_id") or item.get("assigned_account_id") or "",
+            "health": "ok" if ok else "failed",
+            "status": "done" if ok else "error",
+            "latency_ms": item.get("latency_ms"),
+            "error": item.get("error") or "",
+        })
+    return members
 
 
 def _is_ollama_openai_compat_url(endpoint_url: str) -> bool:
@@ -774,6 +1008,7 @@ def _build_system_prompt(
     mcp_disabled_map: Optional[Dict[str, set]] = None,
     compact: bool = False,
     owner: Optional[str] = None,
+    fusion_subagent_override: Optional[Dict[str, Any]] = None,
 ) -> List[Dict]:
     """Build agent system prompt, inject MCP/document context, merge consecutive system msgs."""
     global _cached_base_prompt, _cached_base_prompt_key
@@ -788,7 +1023,7 @@ def _build_system_prompt(
         _ov_sig = _hl.sha256(_json.dumps(get_builtin_overrides() or {}, sort_keys=True).encode()).hexdigest()
     except Exception:
         _ov_sig = ""
-    _fusion_cfg = _fusion_subagent_settings()
+    _fusion_cfg = _fusion_subagent_settings(fusion_subagent_override)
     _fusion_sig = (
         bool(_fusion_cfg.get("enabled")),
         _fusion_cfg.get("depth") or "fast",
@@ -1126,6 +1361,10 @@ def _build_system_prompt(
                 _skills_message = None
     except Exception as _sk_err:
         logger.debug(f"skill injection failed (non-fatal): {_sk_err}")
+
+    _fusion_contract = _fusion_contract_prompt(_fusion_cfg, _extract_last_user_message(messages))
+    if _fusion_contract:
+        agent_prompt += "\n\n" + _fusion_contract
 
     agent_msg = {"role": "system", "content": agent_prompt}
     insert_idx = 0
@@ -1602,6 +1841,7 @@ async def stream_agent_loop(
     fallbacks: Optional[List[tuple]] = None,
     workspace: Optional[str] = None,
     reasoning_effort: Optional[str] = None,
+    fusion_subagent_override: Optional[Dict[str, Any]] = None,
     _is_teacher_run: bool = False,
 ) -> AsyncGenerator[str, None]:
     """Streaming agent loop generator.
@@ -1688,7 +1928,7 @@ async def stream_agent_loop(
 
     if _relevant_tools is not None and mcp_mgr and _retrieval_query:
         ql = _retrieval_query.lower()
-        _fusion_cfg = _fusion_subagent_settings()
+        _fusion_cfg = _fusion_subagent_settings(fusion_subagent_override)
         _fusion_explicit = any(kw in ql for kw in _FUSION_EXPLICIT_KEYWORDS)
         _fusion_auto = bool(_fusion_cfg.get("enabled")) and any(kw in ql for kw in _FUSION_CODE_KEYWORDS)
         if _fusion_explicit or _fusion_auto:
@@ -1775,6 +2015,7 @@ async def stream_agent_loop(
         mcp_disabled_map=_mcp_disabled_map,
         compact=_is_api_model,
         owner=owner,
+        fusion_subagent_override=fusion_subagent_override,
     )
     if workspace:
         # PREPEND (not append) so it dominates the large base prompt — appended
@@ -1852,6 +2093,14 @@ async def stream_agent_loop(
 
     yield f"data: {json.dumps({'type': 'agent_prep', 'data': {k: round(v, 3) for k, v in prep_timings.items()}})}\n\n"
 
+    _fusion_request_cfg = _fusion_subagent_settings(fusion_subagent_override)
+    _fusion_requested = bool(_fusion_request_cfg.get("enabled"))
+    _fusion_tool_seen = False
+    if _fusion_requested:
+        yield (
+            f'data: {json.dumps(_fusion_status_payload("armed", "fusion_subagent_mode", "Fusion mode enabled for this turn", 0, _fusion_request_cfg))}\n\n'
+        )
+
     full_response = ""
     total_start = time.time()
     time_to_first_token = None
@@ -1871,6 +2120,73 @@ async def stream_agent_loop(
     backend_gen_tps = 0      # backend-reported true gen speed (llama.cpp timings)
     backend_prefill_tps = 0  # backend-reported prefill speed
     total_tool_calls = 0  # for budget enforcement
+
+    _fusion_query_l = (_retrieval_query or _last_user or "").lower()
+    _fusion_should_preflight = (
+        _fusion_requested
+        and max_rounds > 0
+        and (
+            any(kw in _fusion_query_l for kw in _FUSION_EXPLICIT_KEYWORDS)
+            or any(kw in _fusion_query_l for kw in _FUSION_CODE_KEYWORDS)
+        )
+    )
+    if _fusion_should_preflight:
+        _fusion_tool_seen = True
+        _fusion_depth = str(_fusion_request_cfg.get("depth") or "fast")
+        _fusion_context = (_retrieval_query or _last_user or "")[:5000]
+        if workspace:
+            _fusion_context = f"Workspace: {workspace}\n\n{_fusion_context}"
+        _fusion_args = {
+            "goal": _last_user or _retrieval_query or "Fusion sub-agent task",
+            "context": _fusion_context,
+            "depth": _fusion_depth,
+            "max_agents": int(_fusion_request_cfg.get("max_agents") or 3),
+            "max_tokens": 1800 if _fusion_depth == "deep" else 1500 if _fusion_depth == "review" else 1000,
+        }
+        if _fusion_request_cfg.get("panel"):
+            _fusion_args["panel"] = _fusion_request_cfg["panel"]
+        _fusion_cmd = json.dumps(_fusion_args, ensure_ascii=False)
+        yield (
+            f'data: {json.dumps(_fusion_status_payload("starting", "mcp__fusion_mcp__fusion_execute_tasks", _fusion_cmd, 0, _fusion_args))}\n\n'
+        )
+        yield (
+            f'data: {json.dumps({"type": "tool_start", "tool": "mcp__fusion_mcp__fusion_execute_tasks", "command": _fusion_cmd, "round": 0})}\n\n'
+        )
+        try:
+            _fusion_desc, _fusion_result = await execute_tool_block(
+                ToolBlock("mcp__fusion_mcp__fusion_execute_tasks", _fusion_cmd),
+                session_id=session_id,
+                disabled_tools=disabled_tools,
+                owner=owner,
+                workspace=workspace,
+            )
+        except Exception as _fusion_err:
+            _fusion_desc = "mcp: mcp__fusion_mcp__fusion_execute_tasks"
+            _fusion_result = {"error": f"Fusion preflight failed: {_fusion_err}", "exit_code": 1}
+        _fusion_output = _fusion_result_output_text(_fusion_result)
+        yield (
+            f'data: {json.dumps(_fusion_status_payload("done", "mcp__fusion_mcp__fusion_execute_tasks", _fusion_cmd, 0, _fusion_args, _fusion_result, _fusion_output))}\n\n'
+        )
+        yield f'data: {json.dumps({"type": "tool_output", "tool": "mcp__fusion_mcp__fusion_execute_tasks", "command": _fusion_cmd, "output": _fusion_output[:2000], "exit_code": _fusion_result.get("exit_code")})}\n\n'
+        tool_events.append({
+            "round": 0,
+            "tool": "mcp__fusion_mcp__fusion_execute_tasks",
+            "command": _fusion_cmd,
+            "output": _fusion_output[:2000],
+            "exit_code": _fusion_result.get("exit_code"),
+        })
+        messages.append({
+            "role": "system",
+            "content": (
+                "Fusion sub-agents already ran automatically for this turn. "
+                "Use the next untrusted Fusion result as worker output and apply it locally. "
+                "Do not call Fusion again unless key information is missing or the result failed."
+            ),
+        })
+        messages.append(untrusted_context_message(
+            "fusion_subagents",
+            _fusion_output or json.dumps(_fusion_result, ensure_ascii=False),
+        ))
 
     # Loop-breaker state. Small models (e.g. deepseek-v4-flash) can get
     # stuck firing the same tool call over and over with no text — burns
@@ -1914,6 +2230,7 @@ async def stream_agent_loop(
     # using tools — i.e. it was cut off, not finished. Drives a "Continue" event
     # so the user can resume instead of the turn silently stalling.
     _exhausted_rounds = False
+    round_reasoning = ""
 
     for round_num in range(1, max_rounds + 1):
         round_response = ""
@@ -1965,7 +2282,7 @@ async def stream_agent_loop(
         else:
             # Local: only MCP schemas when message suggests MCP tool usage
             _last_content = _last_user.lower()
-            _fusion_cfg = _fusion_subagent_settings()
+            _fusion_cfg = _fusion_subagent_settings(fusion_subagent_override)
             _fusion_auto_mcp = bool(_fusion_cfg.get("enabled")) and any(kw in _last_content for kw in _FUSION_CODE_KEYWORDS)
             _wants_mcp = any(kw in _last_content for kw in _MCP_KEYWORDS) or _fusion_auto_mcp
             all_tool_schemas = mcp_schemas if (_wants_mcp and mcp_schemas) else []
@@ -2458,6 +2775,14 @@ async def stream_agent_loop(
             else:
                 cmd_display = block.content.strip()
 
+            _fusion_tool = _is_fusion_tool(block.tool_type)
+            _fusion_args = _fusion_parse_args(block.content) if _fusion_tool else {}
+            if _fusion_tool:
+                _fusion_tool_seen = True
+                yield (
+                    f'data: {json.dumps(_fusion_status_payload("starting", block.tool_type, cmd_display, round_num, _fusion_args))}\n\n'
+                )
+
             yield (
                 f'data: {json.dumps({"type": "tool_start", "tool": block.tool_type, "command": cmd_display, "round": round_num})}\n\n'
             )
@@ -2605,6 +2930,10 @@ async def stream_agent_loop(
             # Forward a file-write diff for inline before/after rendering
             if "diff" in result:
                 tool_output_data["diff"] = result["diff"]
+            if _fusion_tool:
+                yield (
+                    f'data: {json.dumps(_fusion_status_payload("done", block.tool_type, cmd_display, round_num, _fusion_args, result, output_text))}\n\n'
+                )
             yield f'data: {json.dumps(tool_output_data)}\n\n'
 
             # Native document tools open in the editor + carry the REAL doc id.
@@ -2710,6 +3039,11 @@ async def stream_agent_loop(
     if _exhausted_rounds:
         logger.info("[agent] round cap (%d) reached mid-task — emitting rounds_exhausted", max_rounds)
         yield f'data: {json.dumps({"type": "rounds_exhausted", "rounds": max_rounds})}\n\n'
+
+    if _fusion_requested and not _fusion_tool_seen:
+        yield (
+            f'data: {json.dumps(_fusion_status_payload("skipped", "fusion_subagent_mode", "Model did not call a Fusion MCP tool in this turn", 0, _fusion_request_cfg))}\n\n'
+        )
 
     # If the response is completely empty and no tools were executed,
     # yield a fallback message so the user is not left hanging.

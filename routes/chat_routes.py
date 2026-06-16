@@ -397,6 +397,7 @@ def setup_chat_routes(
         agent_runtime = str(form_data.get("agent_runtime", "")).lower().strip()
         allow_bash = form_data.get("allow_bash")
         allow_web_search = form_data.get("allow_web_search")
+        fusion_subagent_enabled_raw = form_data.get("fusion_subagent_enabled")
         use_rag = form_data.get("use_rag")
         search_context = form_data.get("search_context")  # pre-fetched web search results (compare mode)
         compare_mode = str(form_data.get("compare_mode", "")).lower() == "true"
@@ -417,6 +418,11 @@ def setup_chat_routes(
         use_web = _form_bool(use_web)
         use_research = _form_bool(use_research)
         use_rag = _form_bool(use_rag)
+        fusion_subagent_override = (
+            {"enabled": _form_bool(fusion_subagent_enabled_raw)}
+            if fusion_subagent_enabled_raw is not None
+            else None
+        )
         if body and isinstance(body.get("agent_runtime"), str):
             agent_runtime = body.get("agent_runtime", "").lower().strip()
         if agent_runtime not in ("hermes", "odysseus"):
@@ -1158,6 +1164,7 @@ def setup_chat_routes(
                         fallbacks=_fallback_candidates,
                         workspace=workspace or None,
                         reasoning_effort=reasoning_effort,
+                        fusion_subagent_override=fusion_subagent_override,
                     ):
                         if chunk.startswith("data: ") and not chunk.startswith("data: [DONE]"):
                             try:
