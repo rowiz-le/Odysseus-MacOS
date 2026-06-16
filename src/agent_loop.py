@@ -619,8 +619,19 @@ _API_HOSTS = frozenset([
     # schemas and the agent silently degrades to fenced-block parsing.
     "localhost", "127.0.0.1", "host.docker.internal",
 ])
-_MCP_KEYWORDS = frozenset(["mcp", "browse", "browser", "website", "calendar", "event", "email",
+_MCP_KEYWORDS = frozenset(["mcp", "fusion", "sub-agent", "subagent", "browse", "browser", "website", "calendar", "event", "email",
                            "gmail", "screenshot", "navigate", "click", "miniflux", "rss", "feed"])
+_FUSION_EXECUTION_TOOL_NAMES = frozenset({
+    "mcp__fusion_mcp__fusion_coding_assist",
+    "mcp__fusion_mcp__fusion_execute_tasks",
+    "mcp__fusion_mcp__fusion_implementation_plan",
+    "mcp__fusion_mcp__fusion_code_review",
+})
+_FUSION_EXPLICIT_KEYWORDS = frozenset({"fusion", "fusion-mcp", "fusionmcp", "sub-agent", "subagent"})
+_FUSION_CODE_KEYWORDS = frozenset({
+    "code", "coding", "debug", "bug", "fix", "refactor", "implement",
+    "ui", "ux", "frontend", "backend", "review", "sửa", "lỗi", "tích hợp",
+})
 _ADMIN_SCHEMA_NAMES = frozenset([
     "manage_session", "manage_skills", "manage_tasks",
     "manage_endpoints", "manage_mcp", "manage_webhooks", "manage_tokens",
@@ -628,6 +639,25 @@ _ADMIN_SCHEMA_NAMES = frozenset([
     "ask_teacher", "list_models", "search_chats",
 ])
 _TOOL_SELECTION_TIMEOUT_SECONDS = 1.5
+
+
+def _fusion_subagent_settings() -> dict:
+    """Small normalized view of the Fusion sub-agent settings."""
+    enabled = bool(get_setting("fusion_subagent_enabled", False))
+    depth = str(get_setting("fusion_subagent_depth", "fast") or "fast").strip().lower()
+    if depth not in {"fast", "deep", "review"}:
+        depth = "fast"
+    panel = str(get_setting("fusion_subagent_panel", "") or "").strip()
+    try:
+        max_agents = int(get_setting("fusion_subagent_max_agents", 3) or 3)
+    except (TypeError, ValueError):
+        max_agents = 3
+    return {
+        "enabled": enabled,
+        "depth": depth,
+        "panel": panel,
+        "max_agents": max(1, min(max_agents, 8)),
+    }
 
 
 def _is_ollama_openai_compat_url(endpoint_url: str) -> bool:
@@ -758,7 +788,14 @@ def _build_system_prompt(
         _ov_sig = _hl.sha256(_json.dumps(get_builtin_overrides() or {}, sort_keys=True).encode()).hexdigest()
     except Exception:
         _ov_sig = ""
-    cache_key = (frozenset(disabled_tools or []), bool(mcp_mgr), needs_admin, _rt_key, compact, _ov_sig)
+    _fusion_cfg = _fusion_subagent_settings()
+    _fusion_sig = (
+        bool(_fusion_cfg.get("enabled")),
+        _fusion_cfg.get("depth") or "fast",
+        _fusion_cfg.get("panel") or "",
+        int(_fusion_cfg.get("max_agents") or 3),
+    )
+    cache_key = (frozenset(disabled_tools or []), bool(mcp_mgr), needs_admin, _rt_key, compact, _ov_sig, _fusion_sig)
     if _cached_base_prompt and _cached_base_prompt_key == cache_key and not active_document:
         agent_prompt = _cached_base_prompt
         # Skill index is user-editable (name + description), so it must never
@@ -1649,6 +1686,14 @@ async def stream_agent_loop(
         _relevant_tools.update({"create_document", "manage_memory", "manage_notes"})
         logger.info(f"[tool-rag] Keyword fallback selected: {sorted(_relevant_tools - ALWAYS_AVAILABLE)}")
 
+    if _relevant_tools is not None and mcp_mgr and _retrieval_query:
+        ql = _retrieval_query.lower()
+        _fusion_cfg = _fusion_subagent_settings()
+        _fusion_explicit = any(kw in ql for kw in _FUSION_EXPLICIT_KEYWORDS)
+        _fusion_auto = bool(_fusion_cfg.get("enabled")) and any(kw in ql for kw in _FUSION_CODE_KEYWORDS)
+        if _fusion_explicit or _fusion_auto:
+            _relevant_tools.update(_FUSION_EXECUTION_TOOL_NAMES)
+
     # If a document is open the model needs the editing tools available
     # regardless of which selection path (RAG, keyword, caller-provided) ran
     # or what keywords were in the latest user message.
@@ -1920,7 +1965,9 @@ async def stream_agent_loop(
         else:
             # Local: only MCP schemas when message suggests MCP tool usage
             _last_content = _last_user.lower()
-            _wants_mcp = any(kw in _last_content for kw in _MCP_KEYWORDS)
+            _fusion_cfg = _fusion_subagent_settings()
+            _fusion_auto_mcp = bool(_fusion_cfg.get("enabled")) and any(kw in _last_content for kw in _FUSION_CODE_KEYWORDS)
+            _wants_mcp = any(kw in _last_content for kw in _MCP_KEYWORDS) or _fusion_auto_mcp
             all_tool_schemas = mcp_schemas if (_wants_mcp and mcp_schemas) else []
         agent_stream_timeout = int(get_setting("agent_stream_timeout_seconds", 300) or 300)
 

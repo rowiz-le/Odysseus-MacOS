@@ -57,6 +57,22 @@ def _find_npx() -> str:
             return npx_candidate
     return "npx"  # fallback, will fail with a clear error
 
+
+def _find_node() -> str:
+    """Find a Node.js binary for local JavaScript MCP servers."""
+    node = which_tool("node") or shutil.which("node")
+    if node:
+        return node
+    for candidate in [
+        os.path.expanduser("~/.local/node/bin/node"),
+        "/opt/homebrew/bin/node",
+        "/usr/local/bin/node",
+        "/usr/bin/node",
+    ]:
+        if os.path.isfile(candidate):
+            return candidate
+    return "node"
+
 # Server definitions: id -> (script path relative to project root, display name)
 #
 # bash / python / filesystem / web_search were folded into native in-process
@@ -79,6 +95,17 @@ _BUILTIN_NPX_SERVERS = {
         "name": "Built-in: Browser",
         "command": "npx",
         "args": ["-y", "@playwright/mcp@latest", "--headless", "--caps", "vision"],
+    },
+}
+
+# Local non-Python MCP servers. These are registered automatically, but their
+# ids intentionally do not start with "builtin_" so their tools remain visible
+# to native function-calling models as normal external MCP tools.
+_BUILTIN_LOCAL_SERVERS = {
+    "fusion_mcp": {
+        "name": "Fusion MCP",
+        "command": "node",
+        "args": [os.path.expanduser("~/.local/share/antigravity-fusion-mcp/server.mjs")],
     },
 }
 
@@ -121,6 +148,44 @@ async def register_builtin_servers(mcp_manager):
             logger.warning(f"Built-in MCP server script not found: {script_path}")
             continue
         asyncio.create_task(_connect_python_server(server_id, script_path, name))
+
+    node_path = _find_node()
+
+    async def _start_local_servers():
+        await asyncio.sleep(1)
+        for server_id, cfg in _BUILTIN_LOCAL_SERVERS.items():
+            args = [os.path.expanduser(arg) for arg in cfg.get("args", [])]
+            script_path = args[0] if args else ""
+            if script_path and not os.path.exists(script_path):
+                logger.warning(f"Local MCP server script not found: {script_path}")
+                continue
+            try:
+                status = mcp_manager.get_server_status(server_id)
+                if status.get("status") == "connected":
+                    continue
+            except Exception:
+                pass
+
+            command = node_path if cfg.get("command") == "node" else cfg.get("command", node_path)
+            logger.info(f"Starting local MCP server: {cfg['name']} ({command} {' '.join(args)})")
+            try:
+                ok = await mcp_manager.connect_server(
+                    server_id=server_id,
+                    name=cfg["name"],
+                    transport="stdio",
+                    command=command,
+                    args=args,
+                )
+                if ok:
+                    logger.info(f"Local MCP server registered: {cfg['name']}")
+                else:
+                    logger.warning(f"Local MCP server failed to connect: {cfg['name']}")
+            except asyncio.CancelledError:
+                raise
+            except BaseException as e:
+                logger.warning(f"Local MCP server {cfg['name']} error: {type(e).__name__}: {e}")
+
+    asyncio.create_task(_start_local_servers())
 
     # Register NPX-based servers in the background (they take longer to start)
     npx_path = _find_npx()

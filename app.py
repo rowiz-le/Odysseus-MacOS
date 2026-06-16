@@ -2,6 +2,25 @@
 import mimetypes
 import os
 
+
+def sanitize_proxy_env() -> None:
+    """Remove NO_PROXY entries that older httpx/url parsing treats as invalid."""
+    invalid_entries = {"::1", "::1/128"}
+    for key in ("NO_PROXY", "no_proxy"):
+        raw = os.environ.get(key)
+        if not raw:
+            continue
+        entries = [part.strip() for part in raw.split(",") if part.strip()]
+        entries = [part for part in entries if part not in invalid_entries]
+        if entries:
+            os.environ[key] = ",".join(entries)
+        else:
+            os.environ.pop(key, None)
+
+
+sanitize_proxy_env()
+
+
 def register_static_mime_types() -> None:
     """Force stable JS module MIME types across platforms.
 
@@ -671,10 +690,12 @@ app.include_router(setup_font_routes())
 from src.mcp_manager import McpManager
 from src.agent_tools import set_mcp_manager
 from routes.mcp_routes import setup_mcp_routes
+from routes.fusion_routes import setup_fusion_routes
 
 mcp_manager = McpManager()
 set_mcp_manager(mcp_manager)
 app.include_router(setup_mcp_routes(mcp_manager))
+app.include_router(setup_fusion_routes())
 logger.info("MCP routes initialized")
 
 # AI Interaction tools (debates, pipelines, self-managing AI, UI control)

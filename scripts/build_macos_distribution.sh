@@ -111,6 +111,7 @@ rsync -a --delete \
   --exclude '.pytest_cache/' \
   --exclude '__pycache__/' \
   --exclude 'src/cache/' \
+  --exclude 'docs/posters/' \
   --exclude 'docs/FIX_REPORT_*.md' \
   --exclude 'Antigravity_Changes_Report.md' \
   --exclude '*.pyc' \

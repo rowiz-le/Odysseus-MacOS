@@ -147,8 +147,10 @@ def sanitize_error(error: str, max_len: int = 200) -> str:
 
 class WebhookManager:
     def __init__(self, api_key_manager=None):
-        # Disable redirects to prevent SSRF via redirect chains
-        self._client = httpx.AsyncClient(timeout=10, follow_redirects=False)
+        # Disable redirects to prevent SSRF via redirect chains. Ignore proxy
+        # env vars too; malformed NO_PROXY entries (notably bare ::1 on macOS)
+        # can make httpx fail during app startup before any webhook is used.
+        self._client = httpx.AsyncClient(timeout=10, follow_redirects=False, trust_env=False)
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._api_key_manager = api_key_manager
 

@@ -402,8 +402,10 @@ class McpManager:
         try:
             result = await self._do_call(session, tool_name, arguments)
         except Exception as e:
-            # Auto-reconnect for builtin servers whose subprocess may have died
-            if self.is_builtin(server_id):
+            # Auto-reconnect for built-in/local servers whose subprocess may have died.
+            # fusion_mcp stays non-builtin so its tools remain exposed to native
+            # function-calling, but it is still managed by the app.
+            if self.is_builtin(server_id) or server_id == "fusion_mcp":
                 logger.warning(f"MCP call failed for {qualified_name}, attempting reconnect: {e}")
                 reconnected = await self._reconnect_builtin(server_id)
                 if reconnected:
@@ -456,17 +458,38 @@ class McpManager:
     async def _reconnect_builtin(self, server_id: str) -> bool:
         """Tear down and reconnect a crashed builtin MCP server."""
         import sys
-        from src.builtin_mcp import _BUILTIN_SERVERS
+        from src.builtin_mcp import _BUILTIN_SERVERS, _BUILTIN_LOCAL_SERVERS, _find_node
+
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        # Clean up old connection
+        await self.disconnect_server(server_id)
+
+        if server_id in _BUILTIN_LOCAL_SERVERS:
+            cfg = _BUILTIN_LOCAL_SERVERS[server_id]
+            name = cfg["name"]
+            args = [os.path.expanduser(arg) for arg in cfg.get("args", [])]
+            command = _find_node() if cfg.get("command") == "node" else cfg.get("command", _find_node())
+            try:
+                ok = await self.connect_server(
+                    server_id=server_id,
+                    name=name,
+                    transport="stdio",
+                    command=command,
+                    args=args,
+                )
+                if ok:
+                    logger.info(f"Reconnected local MCP server: {name}")
+                return ok
+            except Exception as e:
+                logger.error(f"Failed to reconnect local MCP server {name}: {e}")
+                return False
 
         if server_id not in _BUILTIN_SERVERS:
             return False
 
         script_rel, name = _BUILTIN_SERVERS[server_id]
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         script_path = os.path.join(base_dir, script_rel)
-
-        # Clean up old connection
-        await self.disconnect_server(server_id)
 
         try:
             ok = await self.connect_server(
@@ -559,10 +582,31 @@ class McpManager:
 
     def get_tool_descriptions_for_prompt(self, disabled_map: Optional[Dict[str, set]] = None) -> str:
         """Generate text describing MCP tools for the agent system prompt. Cached."""
+        try:
+            from src.settings import get_setting
+            fusion_enabled = bool(get_setting("fusion_subagent_enabled", False))
+            fusion_depth = str(get_setting("fusion_subagent_depth", "fast") or "fast").strip().lower()
+            if fusion_depth not in {"fast", "deep", "review"}:
+                fusion_depth = "fast"
+            fusion_panel = str(get_setting("fusion_subagent_panel", "") or "").strip()
+            try:
+                fusion_max_agents = int(get_setting("fusion_subagent_max_agents", 3) or 3)
+            except (TypeError, ValueError):
+                fusion_max_agents = 3
+            fusion_max_agents = max(1, min(fusion_max_agents, 8))
+        except Exception:
+            fusion_enabled = False
+            fusion_depth = "fast"
+            fusion_panel = ""
+            fusion_max_agents = 3
         cache_key = (
             frozenset((k, frozenset(v)) for k, v in (disabled_map or {}).items()),
             len(self._tools),
             self._generation,
+            fusion_enabled,
+            fusion_depth,
+            fusion_panel,
+            fusion_max_agents,
         )
         if self._cached_prompt_desc is not None and self._cached_prompt_desc_key == cache_key:
             return self._cached_prompt_desc
@@ -586,6 +630,22 @@ class McpManager:
 
         if not by_server:
             return ""
+
+        has_fusion = any(
+            t["server_id"] == "fusion_mcp" or str(t.get("name", "")).startswith("fusion_")
+            for server_tools in by_server.values()
+            for t in server_tools
+        )
+        if has_fusion and fusion_enabled:
+            panel_hint = f', panel="{fusion_panel}"' if fusion_panel else ", panel=auto"
+            lines.append(
+                "\nFusion Sub-Agent Mode is ON. For non-trivial coding, debugging, UI, architecture, or review work, "
+                "call `mcp__fusion_mcp__fusion_execute_tasks` early as worker sub-agents, not as a final reviewer. "
+                f"Default args: depth=\"{fusion_depth}\", max_agents={fusion_max_agents}{panel_hint}. "
+                "Use the returned action queue as assignments, then continue with local Odysseus tools to inspect files, edit code, run commands, and verify. "
+                "Do not merely summarize Fusion output to the user; convert it into real edits or concrete local actions. "
+                "For tiny one-step questions, skip Fusion."
+            )
 
         for server_name, server_tools in by_server.items():
             # Include identity (e.g. email address) if available

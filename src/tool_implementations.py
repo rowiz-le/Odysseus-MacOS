@@ -1574,6 +1574,10 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
             "hard max": "agent_input_token_hard_max",
             "token budget cap": "agent_input_token_hard_max",
             "input budget cap": "agent_input_token_hard_max",
+            "fusion": "fusion_subagent_enabled", "fusion mode": "fusion_subagent_enabled",
+            "fusion subagent": "fusion_subagent_enabled", "fusion sub-agent": "fusion_subagent_enabled",
+            "fusion depth": "fusion_subagent_depth", "fusion panel": "fusion_subagent_panel",
+            "fusion max agents": "fusion_subagent_max_agents",
             "file access": "tool_path_access_mode", "filesystem access": "tool_path_access_mode",
             "tool file access": "tool_path_access_mode", "path access": "tool_path_access_mode",
         }
@@ -1587,6 +1591,7 @@ async def do_manage_settings(content: str, owner: Optional[str] = None) -> Dict:
             "image_quality": ["low", "medium", "high"],
             "reminder_channel": ["browser", "email", "ntfy"],
             "tool_path_access_mode": ["restricted", "user_folders", "home", "full"],
+            "fusion_subagent_depth": ["fast", "deep", "review"],
         }
         def _coerce(value, default):
             if isinstance(default, bool):

@@ -549,6 +549,7 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
             "agent_max_rounds": (1, 200),
             "agent_max_tool_calls": (0, 1000),  # 0 = unlimited
             "agent_max_tokens": (1024, 65536),
+            "fusion_subagent_max_agents": (1, 8),
             "search_result_count": (1, 200),
         }
         for key in DEFAULT_SETTINGS:
@@ -570,6 +571,12 @@ def setup_auth_routes(auth_manager: AuthManager) -> APIRouter:
                 val = str(val or "").strip().lower()
                 if val not in {"web", "odysseus", "all_allowed"}:
                     raise HTTPException(400, "research_context_scope must be web, odysseus, or all_allowed")
+            if key == "fusion_subagent_depth":
+                val = str(val or "").strip().lower()
+                if val not in {"fast", "deep", "review"}:
+                    raise HTTPException(400, "fusion_subagent_depth must be fast, deep, or review")
+            if key == "fusion_subagent_panel":
+                val = str(val or "").strip()
             if key == "tool_path_extra_roots":
                 if isinstance(val, str):
                     val = [line.strip() for line in val.splitlines() if line.strip()]

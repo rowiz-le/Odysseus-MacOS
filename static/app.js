@@ -24,7 +24,7 @@ import tasksModule from './js/tasks.js';
 import calendarModule from './js/calendar.js';
 import notesModule from './js/notes.js';
 import adminModule from './js/admin.js';
-import settingsModule from './js/settings.js';
+import settingsModule from './js/settings.js?v=20260617livefilter2';
 // Eagerly bind unified minimize/restore behavior across all tool modals.
 import './js/modalManager.js';
 // Desktop window tiling — drag a modal near an edge/corner to snap.
@@ -1680,6 +1680,71 @@ function initializeEventListeners() {
   }
   setupToggle('web-toggle-btn', 'web-toggle', 'web');
   setupToggle('bash-toggle-btn', 'bash-toggle', 'bash');
+
+  // ── Fusion sub-agent mode (global app setting, visible in composer) ──
+  function _setFusionSubagentButton(enabled, busy) {
+    const btn = el('fusion-subagent-btn');
+    if (!btn) return;
+    btn.classList.toggle('active', !!enabled);
+    btn.classList.toggle('saving', !!busy);
+    btn.setAttribute('aria-pressed', enabled ? 'true' : 'false');
+    btn.title = enabled ? 'Fusion sub-agents on' : 'Fusion sub-agents off';
+  }
+
+  function _ensureAgentModeForFusion() {
+    const state = loadToggleState();
+    if ((state.mode || 'chat') === 'agent') return;
+    const agentBtn = el('mode-agent-btn');
+    if (agentBtn) {
+      agentBtn.click();
+      return;
+    }
+    state.mode = 'agent';
+    saveToggleState(state);
+  }
+
+  async function _loadFusionSubagentButton() {
+    try {
+      const res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+      const settings = await res.json();
+      _setFusionSubagentButton(!!settings.fusion_subagent_enabled, false);
+    } catch (_) {}
+  }
+
+  window._syncFusionSubagentButton = function(detail) {
+    if (detail && Object.prototype.hasOwnProperty.call(detail, 'enabled')) {
+      _setFusionSubagentButton(!!detail.enabled, false);
+      return;
+    }
+    _loadFusionSubagentButton();
+  };
+
+  window.addEventListener('fusion-subagent-settings-changed', function(e) {
+    window._syncFusionSubagentButton(e.detail || {});
+  });
+
+  const fusionSubagentBtn = el('fusion-subagent-btn');
+  if (fusionSubagentBtn) {
+    fusionSubagentBtn.addEventListener('click', async () => {
+      const next = !fusionSubagentBtn.classList.contains('active');
+      const prev = !next;
+      _setFusionSubagentButton(next, true);
+      try {
+        await fetch('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ fusion_subagent_enabled: next })
+        });
+        _setFusionSubagentButton(next, false);
+        if (next) _ensureAgentModeForFusion();
+        window.dispatchEvent(new CustomEvent('fusion-subagent-settings-changed', { detail: { enabled: next } }));
+        if (uiModule && uiModule.showToast) uiModule.showToast('Fusion sub-agents ' + (next ? 'on' : 'off'), 1800);
+      } catch (e) {
+        _setFusionSubagentButton(prev, false);
+        if (uiModule && uiModule.showToast) uiModule.showToast('Could not save Fusion setting', 2200);
+      }
+    });
+    _loadFusionSubagentButton();
+  }
 
   // Document editor toggle (special: uses module panel, not a checkbox)
   const overflowDocBtn = el('overflow-doc-btn');

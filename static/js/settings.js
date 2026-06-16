@@ -1004,6 +1004,7 @@ var _searchKeyFields = {
   brave: 'brave_api_key', google_pse: 'google_pse_key',
   tavily: 'tavily_api_key', serper: 'serper_api_key', exa: 'exa_api_key',
 };
+function allowsLegacySearchKey(prov) { return prov !== 'exa'; }
 
 async function initSearchSettings() {
   var provSel = el('set-searchProvider');
@@ -1022,7 +1023,6 @@ async function initSearchSettings() {
   var _settings = {};
 
   function keyFieldFor(prov) { return _searchKeyFields[prov] || ''; }
-  function allowsLegacySearchKey(prov) { return prov !== 'exa'; }
 
   function normalizedResultCount() {
     var value = parseInt(countSel.value, 10);
@@ -1517,6 +1517,635 @@ async function initAgentSettings() {
   if (extraRoots) extraRoots.addEventListener('change', save);
   var cur = toolsInput ? (parseInt(toolsInput.value, 10) || 0) : 0;
   if (msg) msg.textContent = cur > 0 ? 'Limit: ' + cur + ' tool calls per message' : 'Unlimited';
+}
+
+/* ── Fusion Sub-Agent Settings (AI tab) ── */
+async function initFusionSubagentSettings() {
+  var enabledToggle = el('set-fusionSubagentToggle');
+  var depthSel = el('set-fusionDepth');
+  var panelSel = el('set-fusionPanel');
+  var maxAgentsInput = el('set-fusionMaxAgents');
+  var msg = el('set-fusionMsg');
+  var teamPanelSel = el('set-fusionTeamPanel');
+  var teamReloadBtn = el('set-fusionTeamReload');
+  var teamUseBtn = el('set-fusionTeamUse');
+  var teamScanBtn = el('set-fusionTeamScan');
+  var teamTestBtn = el('set-fusionTeamTest');
+  var teamSaveBtn = el('set-fusionTeamSave');
+  var teamAddBtn = el('set-fusionTeamAdd');
+  var teamShowDead = el('set-fusionTeamShowDead');
+  var teamScore = el('set-fusionTeamScore');
+  var teamMembers = el('set-fusionTeamMembers');
+  var teamMsg = el('set-fusionTeamMsg');
+  if (!enabledToggle && !depthSel && !panelSel && !maxAgentsInput) return;
+
+  var fusionState = null;
+  var workingPanel = null;
+  var showDeadModels = !!(teamShowDead && teamShowDead.checked);
+
+  function currentEnabled() {
+    return !!(enabledToggle && enabledToggle.checked);
+  }
+
+  function syncDisabled() {
+    var disabled = !currentEnabled();
+    [depthSel, panelSel, maxAgentsInput].forEach(function(node) {
+      if (node) node.disabled = disabled;
+    });
+  }
+
+  function normalizedMaxAgents() {
+    var n = parseInt(maxAgentsInput ? maxAgentsInput.value : '3', 10);
+    if (!Number.isFinite(n)) n = 3;
+    n = Math.max(1, Math.min(n, 8));
+    if (maxAgentsInput) maxAgentsInput.value = String(n);
+    return n;
+  }
+
+  function notify(enabled) {
+    try {
+      window.dispatchEvent(new CustomEvent('fusion-subagent-settings-changed', { detail: { enabled: !!enabled } }));
+    } catch (_) {}
+    try {
+      if (window._syncFusionSubagentButton) window._syncFusionSubagentButton({ enabled: !!enabled });
+    } catch (_) {}
+  }
+
+  function setTeamMsg(text, danger) {
+    if (!teamMsg) return;
+    teamMsg.textContent = text || '';
+    teamMsg.style.color = danger ? 'var(--red)' : 'color-mix(in srgb, var(--fg) 60%, transparent)';
+  }
+
+  function errorMessage(error, fallback) {
+    var text = error && error.message ? error.message : (fallback || 'Action failed');
+    return String(text).replace(/\s+/g, ' ').slice(0, 220);
+  }
+
+  async function apiJson(url, options) {
+    var res = await fetch(url, options || { credentials: 'same-origin' });
+    var text = await res.text();
+    if (!res.ok) throw new Error(text || (res.status + ' ' + res.statusText));
+    if (!text) return {};
+    try { return JSON.parse(text); }
+    catch (_) { return { text: text }; }
+  }
+
+  function setButtonBusy(button, busy, busyText) {
+    if (!button) return;
+    if (!button.dataset.idleText) button.dataset.idleText = button.textContent;
+    button.disabled = !!busy;
+    button.classList.toggle('is-busy', !!busy);
+    button.textContent = busy ? (busyText || 'Working...') : button.dataset.idleText;
+  }
+
+  async function runTeamAction(button, busyText, work, doneText) {
+    setButtonBusy(button, true, busyText);
+    setTeamMsg(busyText);
+    try {
+      var result = await work();
+      if (doneText) {
+        setTeamMsg(doneText);
+        try { uiModule.showToast(doneText); } catch (_) {}
+      }
+      return result;
+    } catch (e) {
+      var text = errorMessage(e, 'Fusion action failed');
+      setTeamMsg(text, true);
+      try { uiModule.showError(text); } catch (_) {}
+      console.warn('[fusion-team]', text, e);
+      return null;
+    } finally {
+      setButtonBusy(button, false);
+    }
+  }
+
+  function clone(value) {
+    return JSON.parse(JSON.stringify(value || null));
+  }
+
+  function providerById(id) {
+    return (fusionState?.providers || []).find(function(provider) { return provider.id === id; }) || null;
+  }
+
+  function providerLabel(providerId) {
+    var provider = providerById(providerId);
+    return provider ? (provider.label || provider.id) : (providerId || 'Provider');
+  }
+
+  function providerIds() {
+    var ids = new Set();
+    (fusionState?.providers || []).forEach(function(provider) {
+      if (provider && provider.id) ids.add(provider.id);
+    });
+    (fusionState?.models || []).forEach(function(model) {
+      if (model && model.provider) ids.add(model.provider);
+    });
+    return Array.from(ids).sort(function(a, b) {
+      return providerLabel(a).localeCompare(providerLabel(b));
+    });
+  }
+
+  function modelById(id) {
+    return (fusionState?.models || []).find(function(model) { return model.id === id; }) || null;
+  }
+
+  function liveModels() {
+    return (fusionState?.models || []).filter(function(model) { return !!model.usable; });
+  }
+
+  function accountLabel(providerId, accountId) {
+    if (!accountId) return '';
+    var provider = providerById(providerId);
+    var account = (provider?.accounts || []).find(function(item) { return item.id === accountId; });
+    return account ? account.label : accountId;
+  }
+
+  function modelLabel(model) {
+    if (!model) return 'Unknown model';
+    var account = accountLabel(model.provider, model.account_id);
+    var health = model.health_status || 'unknown';
+    var prefix = providerLabel(model.provider) + (account ? ' / ' + account : '');
+    return prefix + ' - ' + (model.label || model.model || model.id) + ' [' + health + ']';
+  }
+
+  function sortedModels() {
+    return (fusionState?.models || []).slice().sort(function(a, b) {
+      if (!!a.usable !== !!b.usable) return a.usable ? -1 : 1;
+      return modelLabel(a).localeCompare(modelLabel(b));
+    });
+  }
+
+  function selectableModels(providerId, opts) {
+    opts = opts || {};
+    var aliveOnly = opts.aliveOnly !== false && !showDeadModels;
+    return sortedModels().filter(function(model) {
+      if (providerId && model.provider !== providerId) return false;
+      if (aliveOnly && !model.usable) return false;
+      if (opts.excludeId && model.id === opts.excludeId) return false;
+      return true;
+    });
+  }
+
+  function modelsForProvider(providerId) {
+    return selectableModels(providerId, { aliveOnly: false });
+  }
+
+  function firstModelForProvider(providerId) {
+    var list = selectableModels(providerId);
+    return list[0] || (showDeadModels ? modelsForProvider(providerId)[0] : null);
+  }
+
+  function modelProviderId(member) {
+    var current = modelById(member.model_id);
+    if (current && current.provider) return current.provider;
+    if (member.provider_id) return member.provider_id;
+    var firstModel = sortedModels()[0];
+    return firstModel ? firstModel.provider : (providerIds()[0] || '');
+  }
+
+  function fillProviderSelect(select, selected) {
+    if (!select) return;
+    select.innerHTML = '';
+    providerIds().forEach(function(providerId) {
+      var total = (fusionState?.models || []).filter(function(model) { return model.provider === providerId; }).length;
+      var usable = (fusionState?.models || []).filter(function(model) { return model.provider === providerId && model.usable; }).length;
+      var opt = document.createElement('option');
+      opt.value = providerId;
+      opt.textContent = providerLabel(providerId) + ' · ' + usable + '/' + total + ' usable';
+      select.appendChild(opt);
+    });
+    if (selected) select.value = selected;
+  }
+
+  function fillModelSelect(select, selected, includeBlank, providerId, opts) {
+    if (!select) return;
+    opts = opts || {};
+    select.innerHTML = '';
+    if (includeBlank) {
+      var blank = document.createElement('option');
+      blank.value = '';
+      blank.textContent = 'None';
+      select.appendChild(blank);
+    }
+    selectableModels(providerId, opts).forEach(function(model) {
+      var opt = document.createElement('option');
+      opt.value = model.id;
+      opt.textContent = modelLabel(model);
+      select.appendChild(opt);
+    });
+    if (selected) select.value = selected;
+  }
+
+  function fillAccountSelect(select, providerId, selected) {
+    if (!select) return;
+    select.innerHTML = '';
+    var auto = document.createElement('option');
+    auto.value = '';
+    auto.textContent = 'Auto spread';
+    select.appendChild(auto);
+    var provider = providerById(providerId);
+    (provider?.accounts || []).forEach(function(account) {
+      var opt = document.createElement('option');
+      opt.value = account.id;
+      opt.textContent = account.label + (account.enabled ? '' : ' (disabled)');
+      select.appendChild(opt);
+    });
+    select.value = selected || '';
+  }
+
+  function selectedAccountForMember(member, providerId) {
+    return (member.account_by_provider && member.account_by_provider[providerId]) || '';
+  }
+
+  function setSelectedAccountForMember(member, providerId, accountId) {
+    if (!providerId) return;
+    member.account_by_provider = member.account_by_provider || {};
+    if (accountId) member.account_by_provider[providerId] = accountId;
+    else delete member.account_by_provider[providerId];
+    if (!Object.keys(member.account_by_provider).length) delete member.account_by_provider;
+  }
+
+  function fallbackText(member) {
+    return (member.fallback_model_ids || [])
+      .map(function(id) {
+        var model = modelById(id);
+        return model ? (model.label || model.model || id) : id;
+      })
+      .join(', ');
+  }
+
+  function renderScore(panel) {
+    if (!teamScore) return;
+    var score = panel?.panel_score || {};
+    var parts = [];
+    if (score.score != null) parts.push('<strong>' + score.score + '/100</strong>');
+    if (score.grade) parts.push('grade ' + score.grade);
+    if (score.readiness) parts.push(score.readiness);
+    if (score.healthy_members != null) parts.push('healthy ' + score.healthy_members);
+    if (score.broken_members != null) parts.push('broken ' + score.broken_members);
+    if (score.benchmark_stale) parts.push('benchmark stale');
+    teamScore.innerHTML = parts.length
+      ? parts.join(' · ') + (score.note ? '<div>' + score.note + '</div>' : '')
+      : 'No score yet. Save Team to score.';
+  }
+
+  function populatePanelSelectors() {
+    var panels = fusionState?.panels || [];
+    if (panelSel) {
+      var current = panelSel.value;
+      panelSel.innerHTML = '<option value="">Auto route</option>';
+      panels.forEach(function(panel) {
+        var opt = document.createElement('option');
+        opt.value = panel.id;
+        opt.textContent = panel.label || panel.id;
+        panelSel.appendChild(opt);
+      });
+      panelSel.value = current || fusionState?.settings?.panel || '';
+    }
+    if (teamPanelSel) {
+      var selected = teamPanelSel.value || fusionState?.settings?.panel || panels[0]?.id || '';
+      teamPanelSel.innerHTML = '';
+      panels.forEach(function(panel) {
+        var opt = document.createElement('option');
+        opt.value = panel.id;
+        opt.textContent = panel.label || panel.id;
+        teamPanelSel.appendChild(opt);
+      });
+      teamPanelSel.value = panels.some(function(panel) { return panel.id === selected; }) ? selected : (panels[0]?.id || '');
+    }
+  }
+
+  function loadWorkingPanel(panelId) {
+    var panel = (fusionState?.panels || []).find(function(item) { return item.id === panelId; }) || (fusionState?.panels || [])[0] || null;
+    workingPanel = clone(panel);
+    renderTeam();
+  }
+
+  function renderTeam() {
+    if (!teamMembers) return;
+    teamMembers.innerHTML = '';
+    if (!workingPanel) {
+      renderScore(null);
+      setTeamMsg('Fusion config not loaded', true);
+      return;
+    }
+    renderScore(workingPanel);
+    (workingPanel.members || []).forEach(function(member, index) {
+      var row = document.createElement('div');
+      row.className = 'fusion-member-row';
+
+      var providerId = modelProviderId(member);
+      var currentModel = modelById(member.model_id);
+      if (!currentModel || currentModel.provider !== providerId || (!showDeadModels && !currentModel.usable)) {
+        var picked = firstModelForProvider(providerId);
+        if (picked) member.model_id = picked.id;
+      }
+      member.provider_id = providerId;
+
+      function field(labelText, control, extraNode) {
+        var wrap = document.createElement('label');
+        wrap.className = 'fusion-member-field';
+        var label = document.createElement('span');
+        label.textContent = labelText;
+        wrap.appendChild(label);
+        wrap.appendChild(control);
+        if (extraNode) wrap.appendChild(extraNode);
+        return wrap;
+      }
+
+      var role = document.createElement('select');
+      role.className = 'settings-select fusion-member-role';
+      (fusionState?.role_options || []).forEach(function(name) {
+        var opt = document.createElement('option');
+        opt.value = name;
+        opt.textContent = name;
+        role.appendChild(opt);
+      });
+      role.value = member.role || 'worker';
+      role.addEventListener('change', function() {
+        member.role = role.value || 'worker';
+      });
+
+      var provider = document.createElement('select');
+      provider.className = 'settings-select fusion-member-provider';
+      fillProviderSelect(provider, providerId);
+
+      var modelWrap = document.createElement('div');
+      modelWrap.className = 'fusion-member-model-wrap';
+      var model = document.createElement('select');
+      model.className = 'settings-select fusion-member-model';
+      fillModelSelect(model, member.model_id, false, provider.value);
+      var modelMeta = document.createElement('div');
+      modelMeta.className = 'fusion-member-meta';
+      function syncModelMeta() {
+        var m = modelById(member.model_id);
+        modelMeta.textContent = m
+          ? (providerLabel(m.provider) + ' · ' + m.id + ' · ' + (m.capabilities || []).slice(0, 4).join(', '))
+          : 'No live model. Click Scan Live or enable Show dead.';
+      }
+      function syncFallbackHint() {
+        fallbackHint.textContent = fallbackText(member) || 'No fallback selected';
+      }
+      function refreshFallbackOptions() {
+        var selected = new Set(member.fallback_model_ids || []);
+        fillModelSelect(fallback, '', false, '', { aliveOnly: true, excludeId: member.model_id });
+        Array.from(fallback.options).forEach(function(opt) {
+          opt.selected = selected.has(opt.value);
+        });
+      }
+      provider.addEventListener('change', function() {
+        var nextProvider = provider.value;
+        var picked = firstModelForProvider(nextProvider);
+        member.provider_id = nextProvider;
+        member.model_id = picked ? picked.id : '';
+        member.account_by_provider = {};
+        member.fallback_model_ids = (member.fallback_model_ids || []).filter(function(id) {
+          return id && id !== member.model_id && !!modelById(id);
+        }).slice(0, 5);
+        fillModelSelect(model, member.model_id, false, nextProvider);
+        fillAccountSelect(account, nextProvider, '');
+        refreshFallbackOptions();
+        syncModelMeta();
+        syncFallbackHint();
+      });
+      model.addEventListener('change', function() {
+        member.model_id = model.value;
+        var m = modelById(member.model_id);
+        if (m && provider.value !== m.provider) {
+          provider.value = m.provider;
+          member.provider_id = m.provider;
+        }
+        member.account_by_provider = {};
+        fillAccountSelect(account, provider.value, '');
+        member.fallback_model_ids = (member.fallback_model_ids || []).filter(function(id) { return id !== member.model_id; });
+        refreshFallbackOptions();
+        syncModelMeta();
+        syncFallbackHint();
+      });
+      modelWrap.appendChild(model);
+      modelWrap.appendChild(modelMeta);
+
+      var account = document.createElement('select');
+      account.className = 'settings-select fusion-member-account';
+      fillAccountSelect(account, provider.value, selectedAccountForMember(member, provider.value));
+      account.addEventListener('change', function() {
+        setSelectedAccountForMember(member, provider.value, account.value);
+      });
+
+      var fallback = document.createElement('select');
+      fallback.className = 'settings-select fusion-member-fallbacks';
+      fallback.multiple = true;
+      fallback.size = 3;
+      fillModelSelect(fallback, '', false, '', { aliveOnly: true, excludeId: member.model_id });
+      Array.from(fallback.options).forEach(function(opt) {
+        opt.selected = (member.fallback_model_ids || []).includes(opt.value);
+      });
+      fallback.addEventListener('change', function() {
+        member.fallback_model_ids = Array.from(fallback.selectedOptions)
+          .map(function(opt) { return opt.value; })
+          .filter(function(id) { return id && id !== member.model_id; })
+          .slice(0, 5);
+        syncFallbackHint();
+      });
+
+      var remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'btn-danger fusion-member-remove';
+      remove.textContent = 'Remove';
+      remove.addEventListener('click', function() {
+        workingPanel.members.splice(index, 1);
+        renderTeam();
+      });
+
+      var fallbackHint = document.createElement('div');
+      fallbackHint.className = 'fusion-member-meta fusion-member-fallback-hint';
+      fallbackHint.textContent = fallbackText(member) || 'No fallback selected';
+
+      row.appendChild(field('Role', role));
+      row.appendChild(field('Provider', provider));
+      row.appendChild(field('Model', modelWrap));
+      row.appendChild(field('Account', account));
+      row.appendChild(field('Fallbacks', fallback));
+      row.appendChild(remove);
+      row.appendChild(fallbackHint);
+      teamMembers.appendChild(row);
+      syncModelMeta();
+    });
+  }
+
+  async function loadFusionState() {
+    if (teamReloadBtn) teamReloadBtn.disabled = true;
+    setTeamMsg('Loading Fusion team...');
+    try {
+      fusionState = await apiJson('/api/fusion/state', { credentials: 'same-origin' });
+      populatePanelSelectors();
+      loadWorkingPanel(teamPanelSel ? teamPanelSel.value : (fusionState.panels || [])[0]?.id);
+      setTeamMsg((fusionState.panels || []).length + ' panels · ' + liveModels().length + '/' + (fusionState.models || []).length + ' live models');
+    } catch (e) {
+      throw e;
+    } finally {
+      if (teamReloadBtn) teamReloadBtn.disabled = false;
+    }
+  }
+
+  try {
+    var res = await fetch('/api/auth/settings', { credentials: 'same-origin' });
+    var settings = await res.json();
+    if (enabledToggle) enabledToggle.checked = !!settings.fusion_subagent_enabled;
+    if (depthSel) depthSel.value = settings.fusion_subagent_depth || 'fast';
+    if (panelSel) panelSel.value = settings.fusion_subagent_panel || '';
+    if (maxAgentsInput) maxAgentsInput.value = settings.fusion_subagent_max_agents || 3;
+    syncDisabled();
+    notify(currentEnabled());
+  } catch (e) {
+    if (msg) { msg.textContent = 'Failed to load Fusion settings'; msg.style.color = 'var(--red)'; }
+  }
+  try {
+    await loadFusionState();
+  } catch (e) {
+    setTeamMsg('Failed to load Fusion team: ' + errorMessage(e), true);
+  }
+
+  async function save() {
+    var enabled = currentEnabled();
+    syncDisabled();
+    try {
+      await apiJson('/api/auth/settings', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fusion_subagent_enabled: enabled,
+          fusion_subagent_depth: depthSel ? depthSel.value : 'fast',
+          fusion_subagent_panel: panelSel ? panelSel.value : '',
+          fusion_subagent_max_agents: normalizedMaxAgents()
+        })
+      });
+      notify(enabled);
+      if (msg) {
+        msg.textContent = enabled
+          ? 'Fusion workers on · ' + (depthSel ? depthSel.value : 'fast') + ' · max ' + normalizedMaxAgents()
+          : 'Fusion workers off';
+        msg.style.color = 'var(--fg)';
+      }
+    } catch (e) {
+      if (msg) { msg.textContent = 'Failed to save Fusion settings'; msg.style.color = 'var(--red)'; }
+      throw e;
+    }
+  }
+
+  if (enabledToggle) enabledToggle.addEventListener('change', save);
+  if (depthSel) depthSel.addEventListener('change', save);
+  if (panelSel) panelSel.addEventListener('change', save);
+  if (maxAgentsInput) maxAgentsInput.addEventListener('change', save);
+  if (teamReloadBtn) teamReloadBtn.addEventListener('click', function() {
+    runTeamAction(teamReloadBtn, 'Reloading...', loadFusionState, 'Reloaded');
+  });
+  if (teamShowDead) teamShowDead.addEventListener('change', function() {
+    showDeadModels = !!teamShowDead.checked;
+    renderTeam();
+    setTeamMsg(showDeadModels ? 'Showing dead/unknown models' : ('Showing live models only · ' + liveModels().length + ' available'));
+  });
+  if (teamScanBtn) teamScanBtn.addEventListener('click', async function() {
+    var summary = await runTeamAction(teamScanBtn, 'Scanning live models...', async function() {
+      var result = await apiJson('/api/fusion/audit-models', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          scope: 'enabled',
+          provider: 'enabled',
+          max_models: 160,
+          batch_limit: 80,
+          only_unchecked: true,
+          stale_hours: 12,
+          timeout_ms: 12000,
+          concurrency: 2,
+          max_accounts: 1
+        })
+      });
+      if (Array.isArray(result.models)) fusionState.models = result.models;
+      if (Array.isArray(result.panels)) fusionState.panels = result.panels;
+      renderTeam();
+      return result.summary || {};
+    });
+    if (summary) {
+      var done = 'Scan done · tested ' + (summary.audited || 0) + ' · live ' + liveModels().length + '/' + (fusionState?.models || []).length;
+      setTeamMsg(done);
+      try { uiModule.showToast(done); } catch (_) {}
+    }
+  });
+  if (teamPanelSel) teamPanelSel.addEventListener('change', function() { loadWorkingPanel(teamPanelSel.value); });
+  if (teamAddBtn) teamAddBtn.addEventListener('click', function() {
+    if (!workingPanel) return;
+    var model = sortedModels().find(function(item) { return item.usable; }) || sortedModels()[0];
+    if (!model) return;
+    var fallbacks = sortedModels()
+      .filter(function(item) { return item.id !== model.id && item.usable; })
+      .slice(0, 2)
+      .map(function(item) { return item.id; });
+    workingPanel.members = workingPanel.members || [];
+    workingPanel.members.push({ role: 'worker', model_id: model.id, fallback_model_ids: fallbacks });
+    renderTeam();
+  });
+  if (teamUseBtn) teamUseBtn.addEventListener('click', async function() {
+    if (!workingPanel) return;
+    await runTeamAction(teamUseBtn, 'Using panel...', async function() {
+      await apiJson('/api/fusion/default-panel', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ panel_id: workingPanel.id })
+      });
+      if (panelSel) panelSel.value = workingPanel.id;
+      await save();
+    }, 'Using ' + (workingPanel.label || workingPanel.id));
+  });
+  if (teamTestBtn) teamTestBtn.addEventListener('click', async function() {
+    if (!workingPanel) return;
+    var summary = await runTeamAction(teamTestBtn, 'Testing models...', async function() {
+      var tested = await apiJson('/api/fusion/test-panel', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ panel: workingPanel, max_accounts: 2, concurrency: 2, timeout_ms: 15000 })
+      });
+      if (Array.isArray(tested.models)) fusionState.models = tested.models;
+      if (Array.isArray(tested.panels)) fusionState.panels = tested.panels;
+      if (teamPanelSel) teamPanelSel.value = tested.panel?.id || workingPanel.id;
+      loadWorkingPanel(teamPanelSel ? teamPanelSel.value : tested.panel?.id);
+      var summary = (tested.audits || []).reduce(function(acc, audit) {
+        var item = (audit.result && audit.result.summary) || audit.result || {};
+        acc.audited += item.audited || 0;
+        acc.ok += item.ok || 0;
+        acc.dead += item.dead || 0;
+        acc.temporary_failed += item.temporary_failed || 0;
+        acc.auth += item.auth || 0;
+        acc.failed += item.failed || 0;
+        return acc;
+      }, { audited: 0, ok: 0, dead: 0, temporary_failed: 0, auth: 0, failed: 0 });
+      return summary;
+    });
+    if (summary && fusionState && workingPanel) {
+      var score = workingPanel.panel_score || {};
+      var done = 'Tested ' + summary.audited + ' · ok ' + summary.ok + ' · dead ' + summary.dead + ' · score ' + (score.score == null ? '?' : score.score) + '/100';
+      setTeamMsg(done);
+      try { uiModule.showToast(done); } catch (_) {}
+    }
+  });
+  if (teamSaveBtn) teamSaveBtn.addEventListener('click', async function() {
+    if (!workingPanel) return;
+    await runTeamAction(teamSaveBtn, 'Saving team...', async function() {
+      var saved = await apiJson('/api/fusion/panel', { method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ panel: workingPanel })
+      });
+      await loadFusionState();
+      if (teamPanelSel) teamPanelSel.value = saved.panel?.id || workingPanel.id;
+      loadWorkingPanel(teamPanelSel ? teamPanelSel.value : saved.panel?.id);
+    }, 'Saved + scored');
+  });
+  if (enabledToggle && enabledToggle.dataset.fusionGlobalBound !== '1') {
+    enabledToggle.dataset.fusionGlobalBound = '1';
+    window.addEventListener('fusion-subagent-settings-changed', function(e) {
+      if (!e.detail || !Object.prototype.hasOwnProperty.call(e.detail, 'enabled')) return;
+      enabledToggle.checked = !!e.detail.enabled;
+      syncDisabled();
+    });
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -2301,6 +2930,7 @@ function initAll() {
   initResearchSettings();
   initResearchSearchSettings();
   initAgentSettings();
+  initFusionSubagentSettings();
   initAppearance();
   initShortcuts();
   initAccount();
