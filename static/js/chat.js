@@ -36,7 +36,8 @@ import createResearchSynapse from './researchSynapse.js';
   // recovery (which fired only on visibilitychange and silently reloaded).
   let _stallWatchdog = null;
   let _stallBannerShown = false;
-  const STALL_THRESHOLD_MS = 60000;
+  const STALL_WARN_MS = 90000;
+  const STALL_ABORT_MS = 180000;
   let _sendInFlight = false;   // covers the window from click → streaming start
   let _displayOverride = null; // Override visible user bubble text (hides injected prompts)
   let _hideUserBubble = false; // Skip user bubble entirely (e.g. continue after stop)
@@ -1452,7 +1453,7 @@ import createResearchSynapse from './researchSynapse.js';
                 typewriterInto(roundHolder.querySelector('.body'), errMsg);
                 break;
               }
-              if (json.delta || json.type === 'tool_start' || json.type === 'agent_step' || json.type === 'doc_stream_delta') {
+              if (json.delta || json.type === 'tool_start' || json.type === 'agent_step' || json.type === 'doc_stream_delta' || json.type === 'fusion_status') {
                 clearProcessingProbe();
               }
               if (json.delta) {
@@ -2278,7 +2279,8 @@ import createResearchSynapse from './researchSynapse.js';
                 if (spinner && spinner.element) spinner.destroy();
                 // Show spinner while waiting for text (skip for research — has its own progress)
                 if (!_researchingStreamIds.has(streamSessionId)) {
-                  spinner = spinnerModule.create('Generating response', 'right', 'wave');
+                  const stepLabel = json.message || (json.round ? `Round ${json.round}: waiting for model` : 'Generating response');
+                  spinner = spinnerModule.create(stepLabel, 'right', 'wave');
                   newBody.appendChild(spinner.createElement());
                   spinner.start();
                 }
@@ -2657,10 +2659,12 @@ import createResearchSynapse from './researchSynapse.js';
         if (currentAbort && currentAbort.signal.aborted) {
           const abortReason = currentAbort._reason || '';
           // Timeout-triggered aborts should remain visible instead of disappearing.
-          if (timedOut || abortReason === 'timeout') {
-            const timeoutMsg = _isAgent
-              ? 'Agent response timed out. Try again, switch to a faster model, or reduce tool usage.'
-              : 'Response timed out. Try again.';
+          if (timedOut || abortReason === 'timeout' || abortReason === 'idle-timeout') {
+            const timeoutMsg = abortReason === 'idle-timeout'
+              ? 'Stream had no progress for 3 minutes. Stopped to avoid an infinite Generating response state.'
+              : (_isAgent
+                ? 'Agent response timed out. Try again, switch to a faster model, or reduce tool usage.'
+                : 'Response timed out. Try again.');
 
             if (holder && !accumulated) {
               holder.querySelector('.body').innerHTML =
@@ -2670,6 +2674,22 @@ import createResearchSynapse from './researchSynapse.js';
               timeoutNote.className = 'stopped-indicator';
               timeoutNote.innerHTML =
                 `<span style="color: var(--color-error);">[${timeoutMsg}]</span>`;
+              const continueBtn = document.createElement('button');
+              continueBtn.className = 'continue-btn';
+              continueBtn.title = 'Continue';
+              continueBtn.textContent = '\u25B8';
+              continueBtn.addEventListener('click', () => {
+                timeoutNote.remove();
+                _hideUserBubble = true;
+                _pendingContinue = holder;
+                const msgInput = uiModule.el('message');
+                if (msgInput) {
+                  msgInput.value = 'Continue — previous stream stalled. Do not repeat. Pick up exactly where you left off and finish.';
+                  const sb = document.querySelector('.send-btn');
+                  if (sb) sb.click();
+                }
+              });
+              timeoutNote.appendChild(continueBtn);
               holder.querySelector('.body').appendChild(timeoutNote);
             }
             currentAbort = null;
@@ -3010,11 +3030,31 @@ import createResearchSynapse from './researchSynapse.js';
     if (uiModule.scrollHistory) uiModule.scrollHistory();
   }
   function _startStallWatchdog() {
-    // Disabled: the server-side stall detector / auto-continue (agent
-    // loop-breaker) handles quiet/stalled streams now, so the manual
-    // "Quiet for Nm — still working?" banner is redundant (and annoying).
-    if (_stallWatchdog) { clearInterval(_stallWatchdog); _stallWatchdog = null; }
+    if (_stallWatchdog) clearInterval(_stallWatchdog);
     _removeStallBanner();
+    _stallWatchdog = setInterval(() => {
+      if (!isStreaming || !currentAbort || currentAbort.signal.aborted) return;
+      const staleMs = Date.now() - (_lastReaderActivity || Date.now());
+      if (staleMs >= STALL_ABORT_MS) {
+        try {
+          if (_streamSessionId) {
+            fetch(`/api/chat/stop/${encodeURIComponent(_streamSessionId)}`, {
+              method: 'POST',
+              credentials: 'same-origin',
+            }).catch(() => {});
+          }
+        } catch (_) {}
+        currentAbort._reason = 'idle-timeout';
+        currentAbort.abort();
+        return;
+      }
+      if (staleMs >= STALL_WARN_MS && !_stallBannerShown) {
+        _showStallBanner(Math.round(staleMs / 1000));
+        if (currentSpinner && currentSpinner.updateMessage) {
+          currentSpinner.updateMessage('Still waiting for model / tool progress');
+        }
+      }
+    }, 5000);
   }
   function _stopStallWatchdog() {
     if (_stallWatchdog) { clearInterval(_stallWatchdog); _stallWatchdog = null; }

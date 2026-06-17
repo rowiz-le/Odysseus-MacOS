@@ -2125,10 +2125,7 @@ async def stream_agent_loop(
     _fusion_should_preflight = (
         _fusion_requested
         and max_rounds > 0
-        and (
-            any(kw in _fusion_query_l for kw in _FUSION_EXPLICIT_KEYWORDS)
-            or any(kw in _fusion_query_l for kw in _FUSION_CODE_KEYWORDS)
-        )
+        and bool((_retrieval_query or _last_user or "").strip())
     )
     if _fusion_should_preflight:
         _fusion_tool_seen = True
@@ -2153,13 +2150,27 @@ async def stream_agent_loop(
             f'data: {json.dumps({"type": "tool_start", "tool": "mcp__fusion_mcp__fusion_execute_tasks", "command": _fusion_cmd, "round": 0})}\n\n'
         )
         try:
-            _fusion_desc, _fusion_result = await execute_tool_block(
-                ToolBlock("mcp__fusion_mcp__fusion_execute_tasks", _fusion_cmd),
-                session_id=session_id,
-                disabled_tools=disabled_tools,
-                owner=owner,
-                workspace=workspace,
+            try:
+                _fusion_timeout = int(get_setting("fusion_subagent_tool_timeout_seconds", 120) or 120)
+            except (TypeError, ValueError):
+                _fusion_timeout = 120
+            _fusion_timeout = max(20, min(_fusion_timeout, 300))
+            _fusion_desc, _fusion_result = await asyncio.wait_for(
+                execute_tool_block(
+                    ToolBlock("mcp__fusion_mcp__fusion_execute_tasks", _fusion_cmd),
+                    session_id=session_id,
+                    disabled_tools=disabled_tools,
+                    owner=owner,
+                    workspace=workspace,
+                ),
+                timeout=_fusion_timeout,
             )
+        except asyncio.TimeoutError:
+            _fusion_desc = "mcp: mcp__fusion_mcp__fusion_execute_tasks"
+            _fusion_result = {
+                "error": f"Fusion preflight timed out after {_fusion_timeout}s; continuing with local fallback",
+                "exit_code": 124,
+            }
         except Exception as _fusion_err:
             _fusion_desc = "mcp: mcp__fusion_mcp__fusion_execute_tasks"
             _fusion_result = {"error": f"Fusion preflight failed: {_fusion_err}", "exit_code": 1}
@@ -2295,11 +2306,14 @@ async def stream_agent_loop(
         # only switches on a pre-content failure, so streamed output is never
         # duplicated; the dead-host cooldown keeps repeat primary attempts cheap.
         _candidates = [(endpoint_url, model, headers)] + list(fallbacks or [])
-        # stream_llm enforces a per-read INACTIVITY timeout (httpx read=timeout),
-        # which kills a wedged/silent endpoint. This wall-clock deadline is the
-        # complementary cap for the rare stream that trickles bytes forever and
-        # so never trips the inactivity timeout. Generous — only catches runaway.
-        _round_deadline = time.time() + max(agent_stream_timeout * 4, 1200)
+        # stream_llm enforces a per-read INACTIVITY timeout (httpx read=timeout).
+        # The wall-clock deadline below catches trickle streams. Fusion turns
+        # already did sub-agent preflight, so keep them tighter; otherwise the
+        # UI can look stuck on "Generating response..." for many minutes.
+        _round_wall_cap = max(agent_stream_timeout * 4, 1200)
+        if _fusion_requested:
+            _round_wall_cap = min(_round_wall_cap, 240)
+        _round_deadline = time.time() + _round_wall_cap
         async for chunk in stream_llm_with_fallback(
             _candidates,
             messages,

@@ -112,6 +112,8 @@ DEFAULT_SETTINGS = {
     "fusion_subagent_depth": "fast",  # fast | deep | review
     "fusion_subagent_panel": "",  # empty = Fusion auto-routes by task
     "fusion_subagent_max_agents": 3,
+    "fusion_subagent_tool_timeout_seconds": 120,
+    "fusion_subagent_agent_max_rounds": 8,
     "agent_input_token_budget": 6000,
     # Ceiling on the *auto-derived* input budget that #1230 introduced. Has
     # no effect when `agent_input_token_budget` is explicitly set (the user's

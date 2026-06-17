@@ -1135,6 +1135,12 @@ def setup_chat_routes(
                     except (TypeError, ValueError):
                         _max_rounds = _DEFAULT_ROUNDS
                     _max_rounds = max(1, min(_max_rounds, 200))
+                    if fusion_subagent_override and fusion_subagent_override.get("enabled"):
+                        try:
+                            _fusion_round_cap = int(get_setting("fusion_subagent_agent_max_rounds", 8) or 8)
+                        except (TypeError, ValueError):
+                            _fusion_round_cap = 8
+                        _max_rounds = min(_max_rounds, max(1, min(_fusion_round_cap, 30)))
                     try:
                         _agent_max_tokens = int(ctx.preset.max_tokens or 0)
                     except (TypeError, ValueError):
@@ -1184,6 +1190,7 @@ def setup_chat_routes(
                                     "tool_start", "tool_output", "agent_step",
                                     "doc_stream_open", "doc_stream_delta",
                                     "doc_update", "doc_suggestions", "ui_control",
+                                    "fusion_status",
                                     "rounds_exhausted",
                                 ):
                                     if data.get("type") == "agent_step":
